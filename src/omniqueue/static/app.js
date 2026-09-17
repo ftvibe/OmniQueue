@@ -257,9 +257,11 @@
     line.classList.toggle("offline", !!snap.offline);
     rs.classList.toggle("spin", !!snap.refreshing);
     rs.textContent = snap.refreshing ? "refreshing…" : `polled ${clock(snap.last_refresh)} · every ${snap.refresh_seconds}s`;
+    const windowLabel = { 24: "the last 24 h", 72: "the last 3 days", 168: "the last 7 days", 0: `the last ${snap.history_days} days of local history` }[state.windowHours]
+      || `the last ${state.windowHours} h`;
     $("#footer-note").textContent = state.error
       ? state.error
-      : `finished jobs come from sacct (last ${snap.lookback_hours} h) plus the local history; times are shown as the cluster reports them.`;
+      : `showing finished jobs from ${windowLabel} · clusters are asked for the last ${snap.lookback_hours} h, older jobs come from the local history · times as the cluster reports them`;
   }
 
   function renderClusters() {

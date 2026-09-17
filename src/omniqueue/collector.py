@@ -216,6 +216,7 @@ class Collector:
             "offline": bool(clusters) and reachable == 0 and self.last_refresh is not None,
             "refresh_seconds": self.config.refresh_seconds,
             "lookback_hours": self.config.lookback_hours,
+            "history_days": self.config.history_days,
             "clusters": clusters,
             "jobs": jobs,
         }
