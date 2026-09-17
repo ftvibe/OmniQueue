@@ -18,7 +18,7 @@ OFF_X, OFF_Y = 2, 1  # centre the 56-unit drawing on the 60-unit canvas
 HI, BODY, SHADE, DARK, EYE = "#7fb5b0", "#4f8f8a", "#3b7672", "#26564f", "#0d3b38"
 BALLS = ["#e2856c", "#b39a4b", "#a9cbc8", "#c8b47c", "#f3c6b6", "#8fa35a", "#b07a8a", "#fbefdc"]
 BALL_HI = "#fbefdc"
-BALL_R = 2.4
+BALL_R = 2.9
 
 g: dict[tuple[int, int], str] = {}
 
@@ -100,14 +100,14 @@ for y in range(24, 40):
 # (controls..., curl centre, turns, clockwise)
 ARMS = [
     # (controls..., ball centre, turns, clockwise, gap). turns = 0 -> no curl, the ball sits at the tip
-    ([(23, 34), (15, 29), (9, 21), (6, 13)], (5, 9), 0, True, 0),            # up-left: straight reach up
-    ([(33, 33), (40, 27), (46, 20), (48, 13)], (47, 7), 1.0, False, 1.0),    # up-right: curls round the ball
+    ([(23, 34), (15, 29), (9, 21), (8, 14)], (9, 8), 1.0, True, 1.0),        # up-left: curls
+    ([(33, 33), (40, 27), (45, 19), (47, 12)], (49, 8), 0, False, 0),        # up-right: straight reach
     ([(21, 37), (12, 38), (5, 35), (2, 30)], (2, 26), 0, True, 0),           # left: straight, tip lifts
-    ([(35, 37), (43, 38), (50, 34), (53, 28)], (50, 23), 0.55, False, 1.2),  # right: hook
-    ([(22, 39), (15, 44), (9, 48), (4, 51)], (2, 53), 0, False, 0),          # down-left outer: long straight sweep
-    ([(34, 39), (41, 44), (47, 48), (51, 51)], (48, 54), 0.35, True, 1.3),   # down-right outer: slight bend
-    ([(26, 40), (24, 46), (20, 51), (14, 53)], (17, 49), 0.95, True, 1.0),   # down-left inner: curls
-    ([(30, 40), (32, 46), (32, 51), (31, 54)], (30, 57), 0, False, 0),       # down-right inner: hangs down
+    ([(35, 37), (43, 38), (50, 34), (53, 28)], (50, 23), 0.6, False, 1.2),   # right: hook
+    ([(22, 39), (15, 44), (9, 49), (4, 51)], (5, 46), 0.95, False, 1.0),     # down-left outer: curls
+    ([(34, 39), (41, 44), (47, 48), (51, 51)], (54, 53), 0, True, 0),        # down-right outer: trails straight
+    ([(26, 40), (24, 46), (20, 51), (15, 54)], (12, 56), 0, True, 0),        # down-left inner: straight
+    ([(30, 40), (32, 46), (33, 51), (31, 54)], (28, 52), 0.5, False, 1.2),   # down-right inner: hooks under
 ]
 for controls, centre, turns, cw, gap in ARMS:
     body = catmull_rom(controls)
@@ -148,8 +148,16 @@ for i, (controls, (cx, cy), turns, _, _) in enumerate(ARMS):
         cx, cy = x1 + (x1 - x0) / d * (BALL_R + 0.6), y1 + (y1 - y0) / d * (BALL_R + 0.6)
         cx = min(max(cx, BALL_R - OFF_X + 0.5), W - OFF_X - BALL_R - 0.5)
         cy = min(max(cy, BALL_R - OFF_Y + 0.5), H - OFF_Y - BALL_R - 0.5)
-    disc(cx, cy, BALL_R, BALLS[i])
-    put(round(cx - 1.6), round(cy - 1.6), BALL_HI if BALLS[i] != BALL_HI else "#c8b47c")
+    colour = BALLS[i]
+    disc(cx, cy, BALL_R, colour)
+    # shaded lower-right crescent and a highlight pixel top-left
+    darker = "#" + "".join(f"{int(int(colour[k:k + 2], 16) * 0.72):02x}" for k in (1, 3, 5))
+    for y in range(int(cy - BALL_R - 1), int(cy + BALL_R + 2)):
+        for x in range(int(cx - BALL_R - 1), int(cx + BALL_R + 2)):
+            dx, dy = x + 0.5 - cx, y + 0.5 - cy
+            if dx * dx + dy * dy <= BALL_R ** 2 and dx + dy > BALL_R * 0.9:
+                put(x, y, darker)
+    put(round(cx - 1.4) - 1, round(cy - 1.4) - 1, BALL_HI if colour != BALL_HI else "#c8b47c")
 
 
 def svg(background: str | None = None, pad: int = 0) -> str:
