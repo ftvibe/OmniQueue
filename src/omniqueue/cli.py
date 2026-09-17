@@ -17,7 +17,7 @@ from .history import HistoryStore
 from .models import Job
 from .server import make_server
 from .slurm import describe_exit
-from .ssh import close_connection, connection_alive, login
+from .ssh import close_connection, connection_alive, login, shell
 
 
 def fmt_duration(seconds: int | None) -> str:
@@ -132,6 +132,16 @@ def cmd_login(args) -> int:
     return rc
 
 
+def cmd_shell(args) -> int:
+    """Open an interactive shell on a cluster over OmniQueue's connection."""
+    cfg = _load(args)
+    matches = [c for c in cfg.clusters if c.name == args.cluster]
+    if not matches:
+        print(f"unknown cluster {args.cluster!r}; configured: {', '.join(c.name for c in cfg.clusters)}", file=sys.stderr)
+        return 2
+    return shell(matches[0], cfg, " ".join(args.command))
+
+
 def cmd_list(args) -> int:
     """One-shot text listing, handy over a plain terminal."""
     cfg = _load(args)
@@ -215,6 +225,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--force", action="store_true", help="reconnect even if a connection is already open")
     s.add_argument("--close", action="store_true", help="close the persistent connection(s) instead")
     s.set_defaults(func=cmd_login)
+
+    s = sub.add_parser("shell", help="open a terminal on a cluster over the shared ssh connection (no second login)")
+    s.add_argument("cluster", help="cluster name from the config")
+    s.add_argument("command", nargs="*", help="optional command to run instead of a shell")
+    s.set_defaults(func=cmd_shell)
 
     s = sub.add_parser("logout", help="close the persistent ssh connection(s)")
     s.add_argument("cluster", nargs="*", help="only these clusters (default: all)")

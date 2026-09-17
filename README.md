@@ -97,6 +97,10 @@ killed and its socket removed, and `login` does the same clean-up before
 connecting if it finds a dead socket. Your own `ssh host` in a terminal does
 not share these connections: OmniQueue keeps its sockets under
 `~/.local/share/omniqueue/ssh/`, separate from anything in `~/.ssh/config`.
+To reuse the already authenticated connection for interactive work, run
+`omniqueue shell dardel` (or `omniqueue shell dardel squeue --me` for a single
+command); it multiplexes over the open master, so no password or 2FA is asked
+again.
 Set `persist_connections = false` to fall back to a fresh ssh per poll (keys or
 an agent are then required). The sockets live in `~/.local/share/omniqueue/ssh/`.
 
@@ -131,6 +135,7 @@ network change that dropped the connection.
 | `omniqueue serve [--open]` | the same without opening a browser (for a headless machine) |
 | `omniqueue login [CLUSTER...]` | open the persistent ssh connection, allowing password / 2FA |
 | `omniqueue logout [CLUSTER...]` | close the persistent ssh connection(s) now |
+| `omniqueue shell CLUSTER [CMD...]` | open a terminal (or run one command) on a cluster over the shared connection, no second login |
 | `omniqueue login --force CLUSTER` | reconnect a cluster whose connection is stale |
 | `omniqueue list [--state running] ...` | poll once and print a table to the terminal |
 | `omniqueue check` | connect to every cluster once and report problems |
