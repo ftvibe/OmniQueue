@@ -30,6 +30,30 @@ class CompletionTests(unittest.TestCase):
         for shell in ("bash", "zsh", "fish"):
             self.assertIn("widget", script(shell))
 
+    def test_safari_widget_window(self):
+        from unittest import mock
+
+        from omniqueue import cli as cli_mod
+
+        script = cli_mod.safari_widget_script("http://127.0.0.1:8765/widget")
+        self.assertIn('URL:"http://127.0.0.1:8765/widget"', script)
+        self.assertIn("set bounds of front window", script)
+        self.assertIn(str(cli_mod.WIDGET_WIDTH), script)
+        # not macOS: the caller falls back to the ordinary browser
+        with mock.patch.object(cli_mod.sys, "platform", "linux"):
+            self.assertFalse(cli_mod.open_widget_window("http://x/widget"))
+        # macOS: osascript is run with the script; a failure also falls back
+        with mock.patch.object(cli_mod.sys, "platform", "darwin"), \
+             mock.patch.object(cli_mod.shutil, "which", return_value="/usr/bin/osascript"), \
+             mock.patch.object(cli_mod.subprocess, "run") as run:
+            run.return_value = mock.Mock(returncode=0, stderr="")
+            self.assertTrue(cli_mod.open_widget_window("http://x/widget"))
+            self.assertEqual(run.call_args[0][0][:2], ["osascript", "-e"])
+            self.assertIn("Safari", run.call_args[0][0][2])
+            run.return_value = mock.Mock(returncode=1, stderr="Safari got an error")
+            self.assertFalse(cli_mod.open_widget_window("http://x/widget"))
+        self.assertTrue(cli_mod.build_parser().parse_args(["monitor", "widget", "--plain"]).plain)
+
     def test_bash_script_parses(self):
         proc = subprocess.run(["bash", "-n"], input=script("bash"), text=True, capture_output=True)
         self.assertEqual(proc.returncode, 0, proc.stderr)

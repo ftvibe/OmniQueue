@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import logging
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -49,6 +51,39 @@ def _collector(cfg: Config, args) -> Collector:
     return Collector(cfg, history)
 
 
+WIDGET_WIDTH, WIDGET_HEIGHT = 390, 780
+
+
+def safari_widget_script(url: str, width: int = WIDGET_WIDTH, height: int = WIDGET_HEIGHT) -> str:
+    """AppleScript that opens `url` in a new Safari window sized like the widget,
+    docked at the right edge of the main screen."""
+    return f"""
+tell application "Finder" to set screenBounds to bounds of window of desktop
+set screenW to item 3 of screenBounds
+set x1 to screenW - {width} - 16
+set y1 to 60
+tell application "Safari"
+    make new document with properties {{URL:"{url}"}}
+    set bounds of front window to {{x1, y1, x1 + {width}, y1 + {height}}}
+    activate
+end tell
+"""
+
+
+def open_widget_window(url: str) -> bool:
+    """On macOS, open the widget in a small Safari window; elsewhere let the caller fall back."""
+    if sys.platform != "darwin" or not shutil.which("osascript"):
+        return False
+    try:
+        proc = subprocess.run(["osascript", "-e", safari_widget_script(url)], capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if proc.returncode != 0:
+        logging.getLogger("omniqueue").warning("could not open Safari window: %s", proc.stderr.strip())
+        return False
+    return True
+
+
 def _perm_warnings(cfg: Config, args) -> list[str]:
     if getattr(args, "demo", False):
         return []
@@ -86,7 +121,13 @@ def cmd_serve(args) -> int:
     if view == "widget" and cfg.access_token:
         print("open /widget in that window once the token cookie is set")
     if args.open:
-        threading.Timer(0.5, webbrowser.open, args=(url,)).start()
+        if getattr(args, "view", "dashboard") == "widget" and not getattr(args, "plain", False):
+            def _open():
+                if not open_widget_window(url):  # not macOS / Safari unavailable: ordinary browser tab
+                    webbrowser.open(url)
+            threading.Timer(0.5, _open).start()
+        else:
+            threading.Timer(0.5, webbrowser.open, args=(url,)).start()
     if cfg.persist_connections and not getattr(args, "demo", False):
         cold = [c.name for c in cfg.enabled_clusters if not c.is_local and not connection_alive(c, cfg)]
         if cold and cfg.connect_on_poll:
@@ -267,6 +308,8 @@ def build_parser() -> argparse.ArgumentParser:
             s.add_argument("view", nargs="?", choices=["dashboard", "widget"], default="dashboard",
                            help="what to open: the full dashboard (default) or only the side widget")
             s.add_argument("--no-open", dest="open", action="store_false", help="do not open a browser")
+            s.add_argument("--plain", action="store_true",
+                           help="with `widget` on macOS: open a normal browser tab instead of a small Safari window")
         else:
             s.add_argument("--open", action="store_true", help="open the dashboard in a browser")
         s.set_defaults(func=cmd_serve, open=open_default)

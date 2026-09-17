@@ -46,7 +46,7 @@ _omniqueue() {
       else
         COMPREPLY=( $(compgen -W "--state" -- "$cur") )
       fi ;;
-    monitor) COMPREPLY=( $(compgen -W "dashboard widget --port --host --no-open" -- "$cur") ) ;;
+    monitor) COMPREPLY=( $(compgen -W "dashboard widget --port --host --no-open --plain" -- "$cur") ) ;;
     serve)   COMPREPLY=( $(compgen -W "--port --host --open" -- "$cur") ) ;;
     init)    COMPREPLY=( $(compgen -W "--force" -- "$cur") ) ;;
     completion) COMPREPLY=( $(compgen -W "bash zsh fish" -- "$cur") ) ;;
@@ -79,7 +79,7 @@ _omniqueue() {
         login)  _arguments '--force[reconnect even if open]' '--close[close instead]' "*:cluster:($clusters)" ;;
         logout) _arguments "*:cluster:($clusters)" ;;
         list)   _arguments '*'{-s,--state}'[only these states]:state:(__STATES__)' ;;
-        monitor) _arguments '--port[listen port]:port' '--host[listen host]:host' '--no-open[do not open a browser]' '1:view:(dashboard widget)' ;;
+        monitor) _arguments '--port[listen port]:port' '--host[listen host]:host' '--no-open[do not open a browser]' '--plain[widget: normal tab instead of a Safari window]' '1:view:(dashboard widget)' ;;
         serve)   _arguments '--port[listen port]:port' '--host[listen host]:host' '--open[open the dashboard]' ;;
         init)    _arguments '--force[overwrite an existing config]' ;;
         completion) _arguments '1:shell:(bash zsh fish)' ;;
@@ -105,6 +105,7 @@ complete -c omniqueue -n '__fish_seen_subcommand_from monitor serve' -l port -x 
 complete -c omniqueue -n '__fish_seen_subcommand_from monitor serve' -l host -x -d 'listen host'
 complete -c omniqueue -n '__fish_seen_subcommand_from monitor' -l no-open -d 'do not open a browser'
 complete -c omniqueue -n '__fish_seen_subcommand_from monitor' -a 'dashboard widget' -d 'what to open'
+complete -c omniqueue -n '__fish_seen_subcommand_from monitor' -l plain -d 'widget: normal tab instead of a Safari window'
 complete -c omniqueue -n '__fish_seen_subcommand_from serve' -l open -d 'open the dashboard'
 complete -c omniqueue -n '__fish_seen_subcommand_from init' -l force -d 'overwrite an existing config'
 complete -c omniqueue -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'
