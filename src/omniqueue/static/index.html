@@ -6,6 +6,7 @@
 <title>OmniQueue</title>
 <link rel="stylesheet" href="/style.css">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<script>try{const t=localStorage.getItem("omniqueue.theme");if(t&&t!=="auto")document.documentElement.dataset.theme=t;}catch(e){}</script>
 </head>
 <body>
 <header class="top">
@@ -23,6 +24,7 @@
       <option value="0">all history</option>
     </select>
     <button id="refresh" title="Poll all clusters now (r)">↻ refresh</button>
+    <button id="theme" title="theme: auto / dark / light (t)">◐</button>
     <span id="refresh-state" class="muted"></span>
   </div>
 </header>
@@ -72,7 +74,7 @@
 
 <footer class="foot">
   <span id="footer-note"></span>
-  <span class="muted">keys: <kbd>/</kbd> search · <kbd>r</kbd> refresh · <kbd>1</kbd>–<kbd>5</kbd> tabs · <kbd>Esc</kbd> close</span>
+  <span class="muted">keys: <kbd>/</kbd> search · <kbd>r</kbd> refresh · <kbd>1</kbd>–<kbd>5</kbd> tabs · <kbd>t</kbd> theme · <kbd>Esc</kbd> close</span>
 </footer>
 <script src="/app.js"></script>
 </body>

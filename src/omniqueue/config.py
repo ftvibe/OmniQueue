@@ -76,7 +76,7 @@ host = "tetralith"               # ssh alias
 # squeue_args = ["--partition=main"]
 # sacct_args  = ["--account=naiss2024-1-23"]
 # use_sacct = true               # set false on clusters without job accounting
-# color = "#4f8cff"
+# color = "#268bd2"
 
 [[clusters]]
 name = "dardel"

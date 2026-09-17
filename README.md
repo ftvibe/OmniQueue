@@ -54,7 +54,7 @@ host = "tetralith"          # anything ssh accepts, aliases from ~/.ssh/config i
 # squeue_args = ["--partition=main"]
 # sacct_args  = ["--account=naiss2024-1-23"]
 # use_sacct = false         # for clusters without job accounting
-# color = "#4f8cff"         # accent colour in the dashboard
+# color = "#268bd2"         # accent colour in the dashboard
 
 [[clusters]]
 name = "dardel"
@@ -114,7 +114,8 @@ an agent are then required). The sockets live in `~/.local/share/omniqueue/ssh/`
   `out of memory` or `cancelled by uid 1234`.
 * Click a row for all details (queue wait, node list, work dir, exit code, ...).
   Finished jobs can be removed from the local history from there.
-* Keys: `/` search, `r` refresh now, `1`-`5` tabs, `Esc` close.
+* Solarized colours, dark and light. The ◐ button (or `t`) cycles auto / dark / light.
+* Keys: `/` search, `r` refresh now, `t` theme, `1`-`5` tabs, `Esc` close.
 
 Only the dashboard's own machine can reach it (`listen_host = "127.0.0.1"`).
 If you run OmniQueue on a remote machine, forward the port with

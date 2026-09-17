@@ -83,10 +83,10 @@ class DemoCollector(Collector):
 def demo_config() -> Config:
     return Config(
         clusters=[
-            ClusterConfig(name="tetralith", host="tetralith.nsc.liu.se", color="#4f8cff"),
-            ClusterConfig(name="dardel", host="dardel.pdc.kth.se", color="#ff9f43"),
-            ClusterConfig(name="lumi", host="lumi.csc.fi", color="#2ecc71"),
-            ClusterConfig(name="offline-cluster", host="unreachable.example.org", color="#a55eea"),
+            ClusterConfig(name="tetralith", host="tetralith.nsc.liu.se", color="#268bd2"),
+            ClusterConfig(name="dardel", host="dardel.pdc.kth.se", color="#cb4b16"),
+            ClusterConfig(name="lumi", host="lumi.csc.fi", color="#859900"),
+            ClusterConfig(name="offline-cluster", host="unreachable.example.org", color="#6c71c4"),
         ],
         refresh_seconds=30,
     )

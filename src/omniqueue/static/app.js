@@ -166,7 +166,8 @@
     const c = state.snapshot?.clusters.find((x) => x.name === name);
     return c?.color || autoColor(name);
   }
-  const AUTO = ["#2f6fed", "#e0803a", "#2fa45a", "#a25ad6", "#c94f7c", "#3aa6b5", "#9c8a2b", "#6f7d8c"];
+  // Solarized accents in a fixed order: blue, orange, green, violet, magenta, cyan, yellow, red
+  const AUTO = ["#268bd2", "#cb4b16", "#859900", "#6c71c4", "#d33682", "#2aa198", "#b58900", "#dc322f"];
   const autoIndex = new Map();
   function autoColor(name) {
     if (!autoIndex.has(name)) autoIndex.set(name, autoIndex.size);
@@ -375,6 +376,20 @@
     return fmtDuration((st - s) / 1000);
   }
 
+  // ---------- theme ----------
+  const THEMES = ["auto", "dark", "light"];
+  const THEME_ICON = { auto: "◐", dark: "☾", light: "☀" };
+  function currentTheme() { try { return localStorage.getItem("omniqueue.theme") || "auto"; } catch { return "auto"; } }
+  function applyTheme(t) {
+    if (t === "auto") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
+    try { localStorage.setItem("omniqueue.theme", t); } catch { /* ignore */ }
+    $("#theme").textContent = THEME_ICON[t];
+    $("#theme").title = `theme: ${t} (t to cycle)`;
+  }
+  function cycleTheme() { applyTheme(THEMES[(THEMES.indexOf(currentTheme()) + 1) % THEMES.length]); }
+  applyTheme(currentTheme());
+  $("#theme").addEventListener("click", cycleTheme);
+
   // ---------- wiring ----------
   $("#refresh").addEventListener("click", requestRefresh);
   $("#search").addEventListener("input", (e) => { state.search = e.target.value; renderTable(); });
@@ -397,6 +412,7 @@
     if (e.target.matches("input, select, textarea")) { if (e.key === "Escape") e.target.blur(); return; }
     if (e.key === "/") { e.preventDefault(); $("#search").focus(); }
     else if (e.key === "r") requestRefresh();
+    else if (e.key === "t") cycleTheme();
     else if (e.key === "Escape") closeDrawer();
     else if ("12345".includes(e.key)) { const b = $$("#tabs button")[Number(e.key) - 1]; if (b) b.click(); }
   });
