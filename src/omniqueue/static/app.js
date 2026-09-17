@@ -285,12 +285,21 @@
               el("span", {}, el("span", {}, c.error || "not reached yet"), el("small", { class: "hint" }, errorHint(c)))),
         el("div", { class: "card-foot" },
           el("span", {}, c.ok ? `polled ${clock(c.last_success)}` : c.last_success ? `last ok ${clock(c.last_success)}` : "never reached"),
-          el("span", {}, c.ok && c.poll_seconds != null ? `${c.poll_seconds.toFixed(1)}s` : ""),
+          connectionEl(c),
         ),
         c.ok && c.warning ? el("div", { class: "card-warn" }, `⚠ ${c.warning}`) : null,
       );
       root.append(card);
     }
+  }
+
+  function connectionEl(c) {
+    if (c.connected === null || c.connected === undefined) {
+      return el("span", {}, c.ok && c.poll_seconds != null ? `${c.poll_seconds.toFixed(1)}s` : "");
+    }
+    return el("span", { class: `conn ${c.connected ? "on" : "off"}`,
+      title: c.connected ? "persistent ssh connection is open" : "no ssh connection open; the next poll reconnects if keys allow, otherwise run omniqueue login" },
+      c.connected ? "ssh connected" : "ssh not connected");
   }
 
   function errorHint(c) {

@@ -13,7 +13,7 @@ from .config import ClusterConfig, Config
 from .history import HistoryStore
 from .models import Job
 from .slurm import combined_command, merge_jobs, parse_sacct, parse_squeue, split_combined_output
-from .ssh import RemoteError, close_connection, run_on_cluster
+from .ssh import RemoteError, close_connection, connection_alive, run_on_cluster
 
 log = logging.getLogger("omniqueue.collector")
 
@@ -54,6 +54,24 @@ class Collector:
         self.last_refresh: float | None = None
         self.next_refresh: float | None = None
         self.refreshing = False
+        self._conn_cache: dict[str, tuple[float, bool]] = {}
+        self.conn_cache_seconds = 10.0
+
+    def connected(self, cluster: ClusterConfig) -> bool | None:
+        """Whether a persistent ssh master for this cluster is open right now.
+
+        None when the question does not apply (local cluster or persistence off).
+        Cached briefly so browser polls do not spawn ssh every few seconds.
+        """
+        if cluster.is_local or not self.config.persist_connections:
+            return None
+        now = time.time()
+        cached = self._conn_cache.get(cluster.name)
+        if cached and now - cached[0] < self.conn_cache_seconds:
+            return cached[1]
+        alive = connection_alive(cluster, self.config)
+        self._conn_cache[cluster.name] = (now, alive)
+        return alive
 
     def _logo_url(self, cluster: ClusterConfig) -> str | None:
         src = self.config.logo_source(cluster)
@@ -118,6 +136,8 @@ class Collector:
         status.error = None
         status.error_kind = None
         status.failures = 0
+        if not cluster.is_local and self.config.persist_connections:
+            self._conn_cache[cluster.name] = (time.time(), True)
         status.warning = "; ".join(warnings) or None
         status.last_success = time.time()
         status.poll_seconds = time.monotonic() - t0
@@ -182,6 +202,9 @@ class Collector:
         with self._lock:
             jobs = [j.to_dict() for lst in self._jobs.values() for j in lst]
             clusters = [s.to_dict() for s in self._status.values()]
+        by_name = {c.name: c for c in self.config.enabled_clusters}
+        for c in clusters:
+            c["connected"] = self.connected(by_name[c["name"]]) if c["name"] in by_name else None
         for j in jobs:
             j["exit_summary"] = _exit_summary(j)
         reachable = sum(1 for c in clusters if c["ok"])

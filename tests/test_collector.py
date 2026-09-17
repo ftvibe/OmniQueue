@@ -129,6 +129,28 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class ConnectionStateTests(unittest.TestCase):
+    def test_snapshot_reports_connection(self):
+        from omniqueue import collector as collector_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Config(clusters=[ClusterConfig(name="far", host="far.example"), ClusterConfig(name="here", host="local")],
+                         data_dir=Path(tmp))
+            col = Collector(cfg, HistoryStore(Path(tmp) / "h.json"))
+            with mock.patch.object(collector_mod, "connection_alive", return_value=False) as alive:
+                snap = col.snapshot()
+                by = {c["name"]: c for c in snap["clusters"]}
+                self.assertFalse(by["far"]["connected"])
+                self.assertIsNone(by["here"]["connected"])  # local cluster: not applicable
+                col.snapshot()
+                alive.assert_called_once()  # cached between snapshots
+            col.conn_cache_seconds = 0
+            with mock.patch.object(collector_mod, "connection_alive", return_value=True):
+                self.assertTrue({c["name"]: c for c in col.snapshot()["clusters"]}["far"]["connected"])
+            cfg.persist_connections = False
+            self.assertIsNone({c["name"]: c for c in col.snapshot()["clusters"]}["far"]["connected"])
+
+
 class CloseConnectionTests(unittest.TestCase):
     def test_stale_socket_is_removed_and_master_killed(self):
         from omniqueue import ssh as ssh_mod

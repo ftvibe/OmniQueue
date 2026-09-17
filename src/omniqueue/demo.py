@@ -64,6 +64,9 @@ class DemoCollector(Collector):
         super().__init__(config, history)
         self._rng = random.Random(seed)
 
+    def connected(self, cluster: ClusterConfig) -> bool | None:
+        return cluster.name != "offline-cluster"
+
     def poll_cluster(self, cluster: ClusterConfig) -> tuple[list[Job], ClusterStatus]:
         status = self._status[cluster.name]
         status.last_attempt = time.time()
