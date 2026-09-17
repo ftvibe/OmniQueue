@@ -19,6 +19,7 @@
     selected: null,
     error: null,
     matches: new Map(), // job key -> fuzzy match info for the current search
+    expanded: new Set(), // array groups opened to show their tasks
     view: "jobs", // "jobs" | "load"; the load view is entered explicitly and fetched on demand
     load: null, // last /api/load answer
     loadTimer: null,
@@ -506,33 +507,103 @@
 
   function renderTable() {
     const tbody = $("#jobs tbody");
-    const jobs = sortJobs(visibleJobs());
-    $("#empty").hidden = jobs.length > 0;
+    const visible = new Set(visibleJobs().map((j) => j.key));
+    // group array tasks; an array shows when any of its tasks passes the filters, with counts over all its tasks
+    const items = OQ.groupArrays(state.snapshot ? state.snapshot.jobs : [])
+      .filter((it) => it.kind === "job" ? visible.has(it.job.key) : it.tasks.some((t) => visible.has(t.key)));
+    sortItems(items);
+    $("#empty").hidden = items.length > 0;
     for (const th of $$("#jobs th")) {
       th.classList.toggle("sorted", th.dataset.sort === state.sort.key);
       th.classList.toggle("desc", th.dataset.sort === state.sort.key && state.sort.desc);
     }
-    const rows = jobs.map((j) => {
-      const note = j.category === "pending" ? j.reason : (j.exit_summary || (j.category === "unknown" ? j.reason : ""));
-      const pendingEstimate = j.category === "pending" && j.start_time;
-      const tr = el("tr", { class: state.selected === j.key ? "selected" : "", "data-key": j.key, onclick: () => openDrawer(j.key) },
-        el("td", {}, el("span", { class: "cl", style: `--card-color:${clusterColor(j.cluster)}` }, j.cluster)),
-        el("td", { class: "mono" }, highlight(j.job_id, state.matches.get(j.key)?.idPos)),
-        el("td", { class: "name", title: j.name }, highlight(j.name, state.matches.get(j.key)?.namePos)),
-        el("td", {}, el("span", { class: `state ${j.category}` }, stateLabel(j.state))),
-        el("td", { class: "num mono" }, elapsedCell(j)),
-        el("td", { class: "num mono" }, fmtDuration(j.time_limit_s)),
-        el("td", { class: "num" }, j.nodes || "–"),
-        el("td", { class: "mono", title: j.submit_time }, fmtTime(j.submit_time)),
-        pendingEstimate
-          ? el("td", { class: "mono estimate", title: `Slurm's estimated start (backfill): ${j.start_time}` }, `~${fmtTime(j.start_time)}`)
-          : el("td", { class: "mono", title: j.start_time }, fmtTime(j.start_time)),
-        el("td", { class: "mono", title: j.end_time }, fmtTime(j.end_time)),
-        el("td", { class: `note ${j.category === "problem" || j.category === "unknown" ? "problem" : ""}`, title: note }, note || ""),
-      );
-      return tr;
-    });
+    const rows = [];
+    for (const it of items) {
+      if (it.kind === "job") { rows.push(jobRow(it.job)); continue; }
+      rows.push(arrayRow(it));
+      if (state.expanded.has(it.key)) {
+        for (const t of sortJobs(it.tasks.filter((t) => visible.has(t.key)))) rows.push(jobRow(t, true));
+      }
+    }
     tbody.replaceChildren(...rows);
+  }
+
+  function sortItems(items) {
+    const { key, desc } = state.sort;
+    const dir = desc ? -1 : 1;
+    const val = (it) => {
+      const o = it.kind === "job" ? it.job : it;
+      if (key === "job_id") return parseFloat(String(it.kind === "job" ? o.job_id : it.base).replace(/[^\d.]/g, "")) || 0;
+      if (key === "elapsed_s") return it.kind === "job" ? (o.elapsed_s ?? -1) : it.elapsed_max;
+      const v = o[key];
+      if (key.endsWith("_time")) return parseSlurmTime(v)?.getTime() ?? -Infinity;
+      if (typeof v === "number") return v;
+      return v == null ? "" : String(v).toLowerCase();
+    };
+    const searching = state.search.trim() !== "";
+    const score = (it) => it.kind === "job" ? (state.matches.get(it.job.key)?.score ?? 0)
+      : Math.max(...it.tasks.map((t) => state.matches.get(t.key)?.score ?? 0));
+    items.sort((a, b) => {
+      if (searching) { const sa = score(a), sb = score(b); if (sa !== sb) return sb - sa; }
+      const va = val(a), vb = val(b);
+      if (va < vb) return -1 * dir;
+      if (va > vb) return 1 * dir;
+      return a.key < b.key ? -1 : 1;
+    });
+  }
+
+  function jobRow(j, isTask = false) {
+    const note = j.category === "pending" ? j.reason : (j.exit_summary || (j.category === "unknown" ? j.reason : ""));
+    const pendingEstimate = j.category === "pending" && j.start_time;
+    const idText = isTask ? `↳ ${j.job_id.split("_")[1] ?? j.job_id}` : j.job_id;
+    return el("tr", { class: `${state.selected === j.key ? "selected" : ""} ${isTask ? "task" : ""}`, "data-key": j.key, onclick: () => openDrawer(j.key) },
+      el("td", {}, isTask ? "" : el("span", { class: "cl", style: `--card-color:${clusterColor(j.cluster)}` }, j.cluster)),
+      el("td", { class: "mono", title: j.job_id }, isTask ? idText : highlight(j.job_id, state.matches.get(j.key)?.idPos)),
+      el("td", { class: "name", title: j.name }, isTask ? el("span", { class: "muted" }, `task ${j.job_id.split("_")[1] ?? ""}`) : highlight(j.name, state.matches.get(j.key)?.namePos)),
+      el("td", {}, el("span", { class: `state ${j.category}` }, stateLabel(j.state))),
+      el("td", { class: "num mono" }, elapsedCell(j)),
+      el("td", { class: "num mono" }, fmtDuration(j.time_limit_s)),
+      el("td", { class: "num" }, j.nodes || "–"),
+      el("td", { class: "mono", title: j.submit_time }, fmtTime(j.submit_time)),
+      pendingEstimate
+        ? el("td", { class: "mono estimate", title: `Slurm's estimated start (backfill): ${j.start_time}` }, `~${fmtTime(j.start_time)}`)
+        : el("td", { class: "mono", title: j.start_time }, fmtTime(j.start_time)),
+      el("td", { class: "mono", title: j.end_time }, fmtTime(j.end_time)),
+      el("td", { class: `note ${j.category === "problem" || j.category === "unknown" ? "problem" : ""}`, title: note }, note || ""),
+    );
+  }
+
+  function toggleAllArrays() {
+    if (!state.snapshot) return;
+    const keys = OQ.groupArrays(state.snapshot.jobs).filter((it) => it.kind === "array").map((it) => it.key);
+    if (keys.some((k) => state.expanded.has(k))) state.expanded.clear(); else for (const k of keys) state.expanded.add(k);
+    renderTable();
+  }
+
+  function arrayRow(g) {
+    const open = state.expanded.has(g.key);
+    const frac = g.total ? g.done / g.total : 0;
+    const toggle = (e) => { e.stopPropagation(); if (open) state.expanded.delete(g.key); else state.expanded.add(g.key); renderTable(); };
+    const c = g.counts;
+    return el("tr", { class: `array ${open ? "open" : ""}`, "data-key": g.key, onclick: toggle, title: open ? "click to collapse the tasks" : "click to show the tasks" },
+      el("td", {}, el("span", { class: "cl", style: `--card-color:${clusterColor(g.cluster)}` }, g.cluster)),
+      el("td", { class: "mono" }, el("span", { class: "caret" }, open ? "▾" : "▸"), `${g.base}_[${g.total}]`),
+      el("td", { class: "name", title: `${g.name} · job array with ${g.total} tasks` }, g.name, el("span", { class: "array-tag" }, `array · ${g.total}`)),
+      el("td", { class: "array-states" },
+        c.running ? el("span", { class: "state running" }, `${c.running} running`) : null,
+        c.pending ? el("span", { class: "state pending" }, `${c.pending} waiting`) : null,
+        c.ok ? el("span", { class: "state ok" }, `${c.ok} done`) : null,
+        c.problem ? el("span", { class: "state problem" }, `${c.problem} failed`) : null),
+      el("td", { class: "num mono" },
+        el("span", { class: "bar done-bar", title: `${g.done} of ${g.total} tasks finished` },
+          el("i", { style: `width:${(frac * 100).toFixed(1)}%` }), el("span", {}, `${g.done}/${g.total}`))),
+      el("td", { class: "num mono" }, fmtDuration(g.time_limit_s)),
+      el("td", { class: "num" }, g.nodes || "–"),
+      el("td", { class: "mono", title: g.submit_time }, fmtTime(g.submit_time)),
+      el("td", { class: "mono", title: g.start_time }, fmtTime(g.start_time)),
+      el("td", { class: "mono", title: g.end_time }, fmtTime(g.end_time)),
+      el("td", { class: `note ${c.problem ? "problem" : ""}` }, c.problem ? g.exit_summary : (c.pending && !c.running ? `${c.pending} of ${g.total} waiting to start` : "")),
+    );
   }
 
   function elapsedCell(j) {
@@ -628,6 +699,7 @@
     else if (e.key === "l") { if (state.view === "load") refreshLoad(); else enterLoadView(); }
     else if (e.key === "q") leaveLoadView();
     else if (e.key === "w") openWidget();
+    else if (e.key === "e") toggleAllArrays();
     else if (e.key === "Escape") { if (state.selected) closeDrawer(); else leaveLoadView(); }
     else if ("12345".includes(e.key)) { const b = $$("#tabs button[data-tab]")[Number(e.key) - 1]; if (b) b.click(); }
   });

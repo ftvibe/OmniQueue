@@ -40,6 +40,21 @@ SACCT_OUT = (
 )
 
 
+class ArrayInfoTests(unittest.TestCase):
+    def test_array_info(self):
+        from omniqueue.models import Job, array_info
+
+        self.assertEqual(array_info("1234"), (None, 1))
+        self.assertEqual(array_info("1234_7"), ("1234", 1))
+        self.assertEqual(array_info("1234_[5-100%4]"), ("1234", 96))
+        self.assertEqual(array_info("12_[1,3,5-6]"), ("12", 4))
+        d = Job(cluster="c", job_id="55_[1-10]", name="arr", state="PENDING").to_dict()
+        self.assertEqual((d["array_job_id"], d["array_tasks"]), ("55", 10))
+        self.assertIsNone(Job(cluster="c", job_id="55", name="x", state="RUNNING").to_dict()["array_job_id"])
+        # round trip through the history store keeps only real fields
+        self.assertEqual(Job.from_dict(d).job_id, "55_[1-10]")
+
+
 class DurationTests(unittest.TestCase):
     def test_formats(self):
         self.assertEqual(parse_duration("1-02:03:04"), 93784)

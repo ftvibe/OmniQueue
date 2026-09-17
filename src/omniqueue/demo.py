@@ -88,6 +88,32 @@ def make_demo_load(cluster: str, rng: random.Random) -> list[dict]:
     return out
 
 
+def make_demo_array(cluster: str, rng: random.Random, base: int, name: str, total: int = 40) -> list[Job]:
+    """One job array: a few tasks running, some done, a couple failed, the rest waiting."""
+    now = datetime.now()
+    limit = 4 * 3600
+    submit = now - timedelta(hours=3)
+    jobs: list[Job] = []
+    for t in range(1, total + 1):
+        jid = f"{base}_{t}"
+        common = dict(cluster=cluster, job_id=jid, name=name, user="demo", partition="main", nodes=1, cpus=32,
+                      time_limit_s=limit, submit_time=_ts(submit), work_dir=f"/proj/demo/{name}", last_seen=time.time())
+        if t <= 10:  # finished
+            elapsed = int(limit * rng.uniform(0.3, 0.8))
+            start = submit + timedelta(minutes=5 * t)
+            state = "FAILED" if t in (4, 7) else "COMPLETED"
+            jobs.append(Job(state=state, exit_code="1:0" if state == "FAILED" else "0:0", elapsed_s=elapsed,
+                            start_time=_ts(start), end_time=_ts(start + timedelta(seconds=elapsed)), node_list=f"n{100 + t}",
+                            source="sacct", **common))
+        elif t <= 15:  # running
+            elapsed = int(limit * rng.uniform(0.1, 0.9))
+            jobs.append(Job(state="RUNNING", elapsed_s=elapsed, start_time=_ts(now - timedelta(seconds=elapsed)),
+                            node_list=f"n{200 + t}", source="squeue", **common))
+        else:  # waiting
+            jobs.append(Job(state="PENDING", reason="Priority", elapsed_s=0, source="squeue", **common))
+    return jobs
+
+
 class DemoCollector(Collector):
     """A Collector that fabricates data instead of talking to clusters."""
 
@@ -125,6 +151,10 @@ class DemoCollector(Collector):
             status.failures += 1
             return [], status
         jobs = make_demo_jobs(cluster.name, self._rng)
+        if cluster.name == "tetralith":
+            jobs += make_demo_array(cluster.name, self._rng, 620000, "phonon-disp")
+        if cluster.name == "lumi":
+            jobs += make_demo_array(cluster.name, self._rng, 699000, "md-replicas", total=12)
         status.ok = True
         status.error = None
         status.last_success = time.time()

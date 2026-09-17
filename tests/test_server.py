@@ -107,6 +107,13 @@ class ServerTests(unittest.TestCase):
         with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/api/load") as r:
             self.assertTrue(r.headers.get("ETag"))
 
+    def test_demo_has_array_jobs(self):
+        snap = json.loads(self.get("/api/state")[2])
+        arr = [j for j in snap["jobs"] if j["array_job_id"] == "620000"]
+        self.assertEqual(len(arr), 40)
+        self.assertEqual({j["category"] for j in arr}, {"running", "pending", "ok", "problem"})
+        self.assertEqual(self.get("/arrays.js")[0], 200)
+
     def test_widget(self):
         for path in ("/widget", "/widget.html"):
             status, ctype, body = self.get(path)

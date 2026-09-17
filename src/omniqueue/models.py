@@ -2,8 +2,38 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
+
+_ARRAY_ID = re.compile(r"^(?P<base>\d+)_(?P<task>\d+|\[(?P<spec>[^\]]*)\])$")
+
+
+def array_info(job_id: str) -> tuple[str | None, int]:
+    """(array job id, number of tasks this row stands for).
+
+    ``1234`` -> (None, 1); ``1234_7`` -> ("1234", 1); ``1234_[5-100%4]`` -> ("1234", 96).
+    """
+    m = _ARRAY_ID.match(job_id or "")
+    if not m:
+        return None, 1
+    spec = m.group("spec")
+    if spec is None:
+        return m.group("base"), 1
+    total = 0
+    for chunk in spec.split("%")[0].split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if "-" in chunk:
+            lo, hi = chunk.split("-", 1)
+            try:
+                total += int(hi.split(":")[0]) - int(lo) + 1
+            except ValueError:
+                total += 1
+        else:
+            total += 1
+    return m.group("base"), max(total, 1)
 
 # Slurm states grouped the way the dashboard shows them.
 ACTIVE_STATES = {"RUNNING", "COMPLETING", "CONFIGURING", "STAGE_OUT", "SIGNALING"}
@@ -111,6 +141,7 @@ class Job:
         d["key"] = self.key
         d["category"] = self.category
         d["terminal"] = self.is_terminal
+        d["array_job_id"], d["array_tasks"] = array_info(self.job_id)
         return d
 
     @classmethod

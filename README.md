@@ -151,7 +151,7 @@ network change that dropped the connection.
 | `omniqueue completion bash\|zsh\|fish` | print a tab-completion script |
 | `omniqueue --demo ...` | run any command against fabricated clusters |
 
-Dashboard keys: `/` search, `r` refresh now, `l` cluster load, `q` back to jobs, `w` side widget, `t` theme, `1`-`5` tabs, `Esc` close.
+Dashboard keys: `/` search, `r` refresh now, `l` cluster load, `q` back to jobs, `e` expand/collapse arrays, `w` side widget, `t` theme, `1`-`5` tabs, `Esc` close.
 | `omniqueue --config PATH ...` | use another config file |
 
 ## Tab completion
@@ -214,6 +214,15 @@ cluster names from your config, `list --state` the job states.
   italic with a `~`, whenever the backfill scheduler has computed one (the
   same value `squeue --start` prints). Jobs the scheduler has not evaluated
   yet show none.
+* **Job arrays** appear as one row per array: `620000_[40]`, the name with an
+  "array · 40" tag, badges for how many tasks are running, waiting, done and
+  failed, and a bar of finished tasks. Click the row to unfold the individual
+  tasks; click a task for its details. The widget groups arrays the same way:
+  one alert per array listing the failed task ids and reasons, one entry in the
+  recent lists, and in running mode one bar split into done / failed / running
+  with "5 running · 25 waiting · 8 done · 2 failed"; click it (or press `e` for
+  all) to unfold thin bars for each running task. `e` in the dashboard expands
+  or collapses every array.
 * Click a row for all details (queue wait, node list, work dir, exit code, ...).
   Finished jobs can be removed from the local history from there.
 * Muted teal / coral / mustard palette, dark and light; failed and done never

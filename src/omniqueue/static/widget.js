@@ -12,6 +12,7 @@
 
   let snapshot = null, etag = null, timer = null;
   let mode = "summary"; // "summary" | "running"
+  const expanded = new Set(); // array groups unfolded in running mode
   const CLIENT_ID = "w-" + Math.random().toString(36).slice(2);
   const store = (k, v) => { try { v === undefined ? localStorage.removeItem(k) : localStorage.setItem(k, JSON.stringify(v)); } catch { /* ignore */ } };
   const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
@@ -93,11 +94,44 @@
   // ---------- running mode: every running job with a progress bar ----------
   function renderRunning() {
     const ul = $("#w-running-list"); ul.replaceChildren();
-    const running = snapshot.jobs.filter((j) => j.category === "running")
-      .map((j) => ({ j, frac: j.time_limit_s ? Math.min(1, (j.elapsed_s || 0) / j.time_limit_s) : 0 }))
+    // arrays with running tasks appear once, with overall progress; plain jobs by time used
+    const active = snapshot.jobs.filter((j) => j.category === "running" || j.array_job_id);
+    const items = OQ.groupArrays(active).filter((it) => it.kind === "job" ? it.job.category === "running" : it.counts.running > 0);
+    const runningCount = snapshot.jobs.filter((j) => j.category === "running").length;
+    $("#w-running-count").textContent = runningCount ? `${runningCount} job${runningCount === 1 ? "" : "s"}` : "";
+    if (!items.length) { ul.append(el("li", { class: "w-empty" }, "no running jobs")); return; }
+    const arrays = items.filter((it) => it.kind === "array");
+    for (const g of arrays) {
+      const c = g.counts, donePct = g.total ? c.ok / g.total * 100 : 0, failPct = g.total ? c.problem / g.total * 100 : 0, runPct = g.total ? c.running / g.total * 100 : 0;
+      const open = expanded.has(g.key);
+      const toggle = () => { if (open) expanded.delete(g.key); else expanded.add(g.key); renderRunning(); };
+      const main = el("span", { class: "w-main" },
+        el("span", { class: "w-runhead" }, el("span", {}, el("span", { class: "w-caret" }, open ? "▾" : "▸"), el("b", {}, g.name), el("span", { class: "w-array" }, `array ${g.base}`)),
+          el("span", { class: "w-pct" }, `${g.done}/${g.total}`)),
+        el("span", { class: "w-bar split", title: `${c.ok} done · ${c.problem} failed · ${c.running} running · ${c.pending} waiting` },
+          el("i", { class: "done", style: `width:${donePct.toFixed(1)}%` }),
+          el("i", { style: `width:${failPct.toFixed(1)}%;background:var(--problem)` }),
+          el("i", { class: "running", style: `width:${runPct.toFixed(1)}%` })),
+        el("span", { class: "w-sub" }, clusterPill(g.cluster), ` ${OQ.arraySummary(g)}`));
+      if (open) {  // thin bars, one per running task, closest to the limit first
+        const tasks = g.tasks.filter((t) => t.category === "running")
+          .map((t) => ({ t, frac: t.time_limit_s ? Math.min(1, (t.elapsed_s || 0) / t.time_limit_s) : 0 })).sort((a, b) => b.frac - a.frac);
+        const list = el("span", { class: "w-tasks" });
+        for (const { t, frac } of tasks) {
+          const pct = Math.round(frac * 100);
+          list.append(el("span", { class: "w-task", title: `task ${t.job_id.split("_")[1]} · ${fmtDur(t.elapsed_s)} of ${fmtDur(t.time_limit_s)}${t.node_list ? " · " + t.node_list : ""}` },
+            el("span", { class: "w-tid" }, t.job_id.split("_")[1] ?? ""),
+            el("span", { class: `w-thin ${pct >= 90 ? "hot" : ""}` }, el("i", { style: `width:${pct}%` })),
+            el("span", { class: `w-tpct ${pct >= 90 ? "hot" : ""}` }, `${pct}%`)));
+        }
+        if (c.pending) list.append(el("span", { class: "w-waiting" }, `${c.pending} task${c.pending === 1 ? "" : "s"} waiting to start`));
+        main.append(list);
+      }
+      ul.append(el("li", { class: `w-item w-run w-arr ${open ? "open" : ""}`, style: `--card-color:${clusterColor(g.cluster)}`, onclick: toggle,
+        title: open ? "click to fold the tasks" : "click to unfold the running tasks (e: all)" }, main));
+    }
+    const running = items.filter((it) => it.kind === "job").map(({ job: j }) => ({ j, frac: j.time_limit_s ? Math.min(1, (j.elapsed_s || 0) / j.time_limit_s) : 0 }))
       .sort((a, b) => b.frac - a.frac || (a.j.time_limit_s || 0) - (b.j.time_limit_s || 0));
-    $("#w-running-count").textContent = running.length ? `${running.length} job${running.length === 1 ? "" : "s"}` : "";
-    if (!running.length) { ul.append(el("li", { class: "w-empty" }, "no running jobs")); return; }
     for (const { j, frac } of running) {
       const pct = Math.round(frac * 100);
       const left = j.time_limit_s ? fmtDur(Math.max(0, j.time_limit_s - (j.elapsed_s || 0))) + " left" : "no limit";
@@ -151,39 +185,70 @@
         el("span", { class: `w-dot ${cl.connected === false ? "off" : cl.connected ? "on" : ""}`, title: cl.connected ? "ssh connected" : cl.connected === false ? "ssh not connected" : "" })));
     }
 
-    // alerts
+    // alerts, failed array tasks grouped per array
     const probs = problems();
+    const alertItems = OQ.groupArrays(probs);
     $("#w-alerts-count").textContent = probs.length ? probs.length : "";
     $("#w-alerts-block").classList.toggle("quiet", probs.length === 0);
     const al = $("#w-alerts"); al.replaceChildren();
     if (!probs.length) al.append(el("li", { class: "w-empty" }, `nothing crashed in the last ${ALERT_HOURS} h`));
-    for (const j of probs.slice(0, 12)) {
-      al.append(el("li", { class: "w-item alert", style: `--card-color:${clusterColor(j.cluster)}` },
-        el("span", { class: "w-main" }, el("b", {}, j.name), el("span", { class: "w-sub" }, clusterPill(j.cluster), ` ${j.job_id} · ${fmtWhen(j.end_time)}`)),
-        el("span", { class: "w-tag problem" }, j.exit_summary || label(j.state)),
-        el("button", { class: "w-x", title: "dismiss", onclick: () => { dismissed.add(j.key); store("omniqueue.widget.dismissed", [...dismissed]); render(); } }, "✕")));
+    for (const it of alertItems.slice(0, 12)) {
+      if (it.kind === "job") {
+        const j = it.job;
+        al.append(el("li", { class: "w-item alert", style: `--card-color:${clusterColor(j.cluster)}` },
+          el("span", { class: "w-main" }, el("b", {}, j.name), el("span", { class: "w-sub" }, clusterPill(j.cluster), ` ${j.job_id} · ${fmtWhen(j.end_time)}`)),
+          el("span", { class: "w-tag problem" }, j.exit_summary || label(j.state)),
+          el("button", { class: "w-x", title: "dismiss", onclick: () => { dismissed.add(j.key); store("omniqueue.widget.dismissed", [...dismissed]); render(); } }, "✕")));
+      } else {
+        const g = it, reasons = {};
+        for (const t of g.tasks) { const r = t.exit_summary || label(t.state); reasons[r] = (reasons[r] || 0) + (t.array_tasks || 1); }
+        const why = Object.entries(reasons).sort((a, b) => b[1] - a[1]).map(([r, n]) => n > 1 ? `${r} ×${n}` : r).join(", ");
+        const tasks = g.tasks.map((t) => t.job_id.split("_")[1]).slice(0, 6).join(",") + (g.tasks.length > 6 ? ",…" : "");
+        al.append(el("li", { class: "w-item alert", style: `--card-color:${clusterColor(g.cluster)}` },
+          el("span", { class: "w-main" }, el("span", {}, el("b", {}, g.name), el("span", { class: "w-array" }, `array ${g.base}`)),
+            el("span", { class: "w-sub" }, clusterPill(g.cluster), ` tasks ${tasks} · ${fmtWhen(g.end_time)}`)),
+          el("span", { class: "w-tag problem", title: why }, `${g.total} task${g.total === 1 ? "" : "s"} failed`),
+          el("button", { class: "w-x", title: "dismiss all", onclick: () => { for (const t of g.tasks) dismissed.add(t.key); store("omniqueue.widget.dismissed", [...dismissed]); render(); } }, "✕")));
+      }
     }
 
-    // recently started
-    const started = jobs.filter((j) => j.category === "running" && j.start_time).sort((a, b) => parseT(b.start_time) - parseT(a.start_time));
-    fillList($("#w-started"), started, (j) => [`started ${fmtWhen(j.start_time)}`, el("span", { class: "w-tag running" }, `${fmtDur(j.elapsed_s)} / ${fmtDur(j.time_limit_s)}`)], "no running jobs");
-    $("#w-started-count").textContent = started.length ? `${started.length} running` : "";
+    // recently started: arrays as one entry with their running task count
+    const runningJobs = jobs.filter((j) => j.category === "running" && j.start_time);
+    const started = OQ.groupArrays(runningJobs).sort((a, b) => latest(b, "start_time") - latest(a, "start_time"));
+    fillList($("#w-started"), started, (it) => it.kind === "job"
+      ? [`started ${fmtWhen(it.job.start_time)}`, el("span", { class: "w-tag running" }, `${fmtDur(it.job.elapsed_s)} / ${fmtDur(it.job.time_limit_s)}`)]
+      : [`${it.tasks.length} task${it.tasks.length === 1 ? "" : "s"} running · latest ${fmtWhen(latestTime(it, "start_time"))}`,
+         el("span", { class: "w-tag running" }, `${it.tasks.length} × ≤ ${fmtDur(it.time_limit_s)}`)], "no running jobs");
+    $("#w-started-count").textContent = runningJobs.length ? `${runningJobs.length} running` : "";
 
-    // recently finished (completed only; problems live in alerts)
-    const finished = jobs.filter((j) => j.category === "ok" && j.end_time).sort((a, b) => parseT(b.end_time) - parseT(a.end_time));
-    fillList($("#w-finished"), finished, (j) => [`finished ${fmtWhen(j.end_time)}`, el("span", { class: "w-tag ok" }, `took ${fmtDur(j.elapsed_s)}`)], "nothing finished yet");
+    // recently finished (completed only; problems live in alerts), arrays grouped
+    const finishedJobs = jobs.filter((j) => j.category === "ok" && j.end_time);
+    const finished = OQ.groupArrays(finishedJobs).sort((a, b) => latest(b, "end_time") - latest(a, "end_time"));
+    fillList($("#w-finished"), finished, (it) => it.kind === "job"
+      ? [`finished ${fmtWhen(it.job.end_time)}`, el("span", { class: "w-tag ok" }, `took ${fmtDur(it.job.elapsed_s)}`)]
+      : [`${it.tasks.length} task${it.tasks.length === 1 ? "" : "s"} done · latest ${fmtWhen(latestTime(it, "end_time"))}`,
+         el("span", { class: "w-tag ok" }, `≤ ${fmtDur(it.elapsed_max)} each`)], "nothing finished yet");
     $("#w-finished-count").textContent = "";
 
     const eff = Math.round((snapshot.effective_refresh || snapshot.refresh_seconds) / 60);
     $("#w-status").textContent = `polled ${clock(snapshot.last_refresh)} · clusters polled every ${eff} min · widget re-reads every ${Math.round(REFRESH_S / 60)} min`;
   }
+  function latestTime(it, field) {
+    if (it.kind === "job") return it.job[field];
+    return it.tasks.map((t) => t[field]).filter(Boolean).sort((a, b) => parseT(b) - parseT(a))[0] || "";
+  }
+  const latest = (it, field) => parseT(latestTime(it, field)) || 0;
   function fillList(ul, items, extra, emptyText) {
     ul.replaceChildren();
     if (!items.length) { ul.append(el("li", { class: "w-empty" }, emptyText)); return; }
-    for (const j of items.slice(0, LIMIT)) {
-      const [sub, tag] = extra(j);
-      ul.append(el("li", { class: "w-item", style: `--card-color:${clusterColor(j.cluster)}` },
-        el("span", { class: "w-main" }, el("b", {}, j.name), el("span", { class: "w-sub" }, clusterPill(j.cluster), ` ${j.job_id} · ${sub}`)), tag));
+    for (const it of items.slice(0, LIMIT)) {
+      const [sub, tag] = extra(it);
+      const name = it.kind === "job" ? it.job.name : it.name;
+      const cluster = it.kind === "job" ? it.job.cluster : it.cluster;
+      const id = it.kind === "job" ? it.job.job_id : `${it.base}_[…]`;
+      ul.append(el("li", { class: "w-item", style: `--card-color:${clusterColor(cluster)}` },
+        el("span", { class: "w-main" }, el("span", {}, el("b", {}, name), it.kind === "array" ? el("span", { class: "w-array" }, "array") : null),
+          el("span", { class: "w-sub" }, clusterPill(cluster), ` ${id} · ${sub}`)), tag));
     }
   }
 
@@ -215,6 +280,11 @@
     if (e.target.matches("input, select, textarea")) return;
     if (e.key === "r") setMode(mode === "running" ? "summary" : "running");
     else if (e.key === "q" || e.key === "Escape") setMode("summary");
+    else if (e.key === "e" && mode === "running" && snapshot) {
+      const keys = OQ.groupArrays(snapshot.jobs).filter((it) => it.kind === "array" && it.counts.running).map((it) => it.key);
+      if (keys.some((k) => expanded.has(k))) expanded.clear(); else for (const k of keys) expanded.add(k);
+      renderRunning();
+    }
   });
   $("#w-clear").addEventListener("click", () => { for (const j of problems()) dismissed.add(j.key); store("omniqueue.widget.dismissed", [...dismissed]); render(); });
   $("#w-notify").addEventListener("click", async () => { if ("Notification" in window && Notification.permission === "default") await Notification.requestPermission(); updateBell(); });
