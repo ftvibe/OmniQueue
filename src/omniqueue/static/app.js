@@ -272,16 +272,16 @@
         onclick: () => { hidden ? state.hiddenClusters.delete(c.name) : state.hiddenClusters.add(c.name); savePrefs(); render(); },
       },
         el("div", { class: "card-head" }, logoEl(c), el("b", {}, c.name), el("small", {}, c.host)),
-        el("div", { class: "card-counts" },
-          ...[["running", "running"], ["pending", "pending"], ["problem", "failed"], ["ok", "done"]].map(([k, label]) =>
-            el("span", { class: `pill ${k}`, title: label }, el("b", {}, counts[k] || 0), label)),
-        ),
+        c.ok
+          ? el("div", { class: "card-counts" },
+              ...[["running", "running"], ["pending", "pending"], ["problem", "failed"], ["ok", "done"]].map(([k, label]) =>
+                el("span", { class: `pill ${k}`, title: label }, el("b", {}, counts[k] || 0), label)))
+          : el("div", { class: "card-error" }, el("span", { class: "warn-icon" }, "⚠"), el("span", {}, c.error || "not reached yet")),
         el("div", { class: "card-foot" },
           el("span", {}, c.ok ? `polled ${clock(c.last_success)}` : c.last_success ? `last ok ${clock(c.last_success)}` : "never reached"),
-          el("span", {}, c.poll_seconds != null ? `${c.poll_seconds.toFixed(1)}s` : ""),
+          el("span", {}, c.ok && c.poll_seconds != null ? `${c.poll_seconds.toFixed(1)}s` : ""),
         ),
-        c.error ? el("div", { class: "card-error" }, `⚠ ${c.error}`) : null,
-        c.warning ? el("div", { class: "card-warn" }, `⚠ ${c.warning}`) : null,
+        c.ok && c.warning ? el("div", { class: "card-warn" }, `⚠ ${c.warning}`) : null,
       );
       root.append(card);
     }

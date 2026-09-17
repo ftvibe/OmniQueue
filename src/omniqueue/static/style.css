@@ -63,9 +63,9 @@ kbd { font: 11px var(--mono); background: var(--surface-2); border: 1px solid va
 #refresh-state { font-variant-numeric: tabular-nums; min-width: 12ch; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.clusters { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; padding: 16px 20px 4px; align-items: start; }
-.card { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--card-color, var(--border));
-  border-radius: 8px; padding: 10px 14px; box-shadow: var(--shadow); cursor: pointer; }
+.clusters { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; padding: 16px 20px 4px; align-items: stretch; }
+.card { display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--card-color, var(--border));
+  border-radius: 8px; padding: 10px 14px; box-shadow: var(--shadow); cursor: pointer; min-height: 132px; }
 .card.off { opacity: .55; }
 .card.err { border-color: var(--problem); border-left-color: var(--problem); }
 .card-head { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; align-items: center; }
@@ -82,8 +82,10 @@ kbd { font: 11px var(--mono); background: var(--surface-2); border: 1px solid va
 .pill.ok { color: var(--ok); background: var(--ok-bg); }
 .pill.problem { color: var(--problem); background: var(--problem-bg); }
 .pill.unknown { color: var(--unknown); background: var(--unknown-bg); }
-.card-foot { margin-top: 8px; font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; gap: 8px; font-variant-numeric: tabular-nums; }
-.card-error { margin-top: 6px; font-size: 12px; color: var(--problem); word-break: break-word; }
+.card-foot { margin-top: auto; padding-top: 8px; font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; gap: 8px; font-variant-numeric: tabular-nums; }
+.card-error { display: flex; gap: 8px; align-items: flex-start; flex: 1; margin-top: 10px; padding: 6px 8px; border-radius: 6px;
+  font-size: 12px; line-height: 1.4; color: var(--problem); background: var(--problem-bg); word-break: break-word; }
+.card-error .warn-icon { flex: none; font-size: 14px; line-height: 1.2; }
 .card-warn { margin-top: 6px; font-size: 12px; color: var(--pending); word-break: break-word; }
 
 .tabs { display: flex; gap: 4px; padding: 12px 20px 0; border-bottom: 1px solid var(--border); margin: 0 0 0; }
