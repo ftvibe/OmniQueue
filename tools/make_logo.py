@@ -85,13 +85,19 @@ def empty(x: int, y: int) -> bool:
 
 
 body_px = [(x, y) for (x, y), c in g.items() if c == BODY]
-dark = {(x, y) for x, y in body_px if empty(x, y + 1) or empty(x + 1, y) or empty(x + 1, y + 1)}
-shade = {
-    (x, y) for x, y in body_px
-    if (x, y) not in dark and any(
-        (x + dx, y + dy) in dark for dx, dy in ((0, 1), (1, 0), (1, 1), (0, 2), (2, 0), (2, 1), (1, 2))
-    )
-}
+
+
+def near_edge(x: int, y: int, reach: int) -> bool:
+    """True when empty space lies within `reach` pixels to the right or below."""
+    return any(empty(x + dx, y + dy) for dx in range(reach + 1) for dy in range(reach + 1) if dx or dy)
+
+
+dark = {(x, y) for x, y in body_px if near_edge(x, y, 1)}
+shade = {(x, y) for x, y in body_px if (x, y) not in dark and near_edge(x, y, 3)}
+# the underside of the mantle, where the head narrows, sits in shadow
+for x, y in body_px:
+    if 15 <= y <= 22:
+        (dark if y >= 17 and abs(x - 24) > 3 else shade).add((x, y))
 for p in dark:
     g[p] = DARK
 for p in shade:
@@ -104,12 +110,19 @@ for x, y in ((22, 4), (23, 4), (21, 5), (20, 6), (19, 7), (18, 8), (17, 10), (17
     if g.get((x, y)) == BODY:
         g[(x, y)] = HI
 
-# ---- eyes: two plain squares ---------------------------------------------------------------
-for ex in (16, 30):
-    for dx in range(2):
-        for dy in range(2):
-            put(ex + dx, 26 + dy, EYE)
-
+# ---- eyes: a light dome on each bulge with a dark horizontal slit pupil ---------------
+EYE_PATTERN = [
+    " hhh ",
+    "hhhhh",
+    "h@@@h",
+    " sss ",
+]
+EYE_COLOURS = {"h": HI, "@": EYE, "s": SHADE}
+for ex in (17, 26):
+    for dy, row in enumerate(EYE_PATTERN):
+        for dx, ch in enumerate(row):
+            if ch != " ":
+                put(ex + dx, 25 + dy, EYE_COLOURS[ch])
 
 # ---- balls at the arm tips, one colour per source -------------------------------------------
 def ball(cx: float, cy: float, colour: str) -> None:
