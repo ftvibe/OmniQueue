@@ -184,11 +184,15 @@ cluster names from your config, `list --state` the job states.
   `out of memory` or `cancelled by uid 1234`.
 * **Cluster load** (`l`, or the button at the right of the tabs) swaps your
   jobs for a view of each cluster: CPU utilisation, and per partition the node
-  states as a bar (idle / mixed / allocated / down), free nodes and CPUs, the
-  time limit, and the queue pressure from *all* users: running jobs, queued
-  jobs and how many nodes they are asking for. Free nodes in bold means you
-  can probably start right away; a queue with nodes wanted and no free nodes
-  means a wait. `q` (or Esc) returns to your jobs.
+  states as a bar (idle / mixed / allocated / down), free nodes and free
+  physical cores, the time limit, and the queue pressure from *all* users:
+  running jobs, queued jobs and how many nodes they are asking for. Free nodes
+  counts fully idle nodes; free cores also includes the empty cores of mixed
+  nodes. On clusters where Slurm counts hardware threads as CPUs (LUMI, for
+  instance, reports 256 per 128-core node) the figures are divided by the
+  threads per core and a note says so, so you always read cores. Free nodes
+  in bold means you can probably start right away; a queue with nodes wanted
+  and no free nodes means a wait. `q` (or Esc) returns to your jobs.
   The load is fetched **on demand only**: when you enter the view, when you
   press `l` again, or with its refresh button. The regular poll never runs
   `sinfo`. Per cluster, `load_partitions = ["main", "gpu"]` limits the view

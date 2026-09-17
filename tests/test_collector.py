@@ -93,7 +93,7 @@ class LocalClusterEndToEnd(unittest.TestCase):
                   "  *) echo bad user >&2; exit 9 ;;\n"
                   "esac\n")
         _fake_bin(self.bin, "sacct", f"cat <<'X'\n{SACCT_OUT}X\n")
-        _fake_bin(self.bin, "sinfo", "printf 'main*|up|10|allocated|320/0/0/320|1-00:00:00\\nmain*|up|3|idle|0/96/0/96|1-00:00:00\\n'\n")
+        _fake_bin(self.bin, "sinfo", "printf 'main*|up|10|allocated|320/0/0/320|1-00:00:00|2:16:1\\nmain*|up|3|idle|0/96/0/96|1-00:00:00|2:16:1\\n'\n")
         col = self._collector()
         col.refresh()
         snap = col.snapshot()

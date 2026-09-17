@@ -328,12 +328,13 @@
       if (sum && sum.utilisation !== null && sum.utilisation !== undefined) {
         const pct = Math.round(sum.utilisation * 100);
         head.append(
-          el("span", { class: "gauge", title: `${fmtInt(sum.cpus_allocated)} of ${fmtInt(sum.cpus_total)} CPUs allocated` },
-            el("span", { class: `gauge-bar ${pct >= 90 ? "hot" : ""}` }, el("i", { style: `width:${pct}%` })), `${pct}% CPUs busy`),
+          el("span", { class: "gauge", title: `${fmtInt(sum.cores_allocated ?? sum.cpus_allocated)} of ${fmtInt(sum.cores_total ?? sum.cpus_total)} cores allocated` },
+            el("span", { class: `gauge-bar ${pct >= 90 ? "hot" : ""}` }, el("i", { style: `width:${pct}%` })), `${pct}% cores busy`),
           el("span", { class: "muted" }, `${fmtInt(sum.nodes_idle)} idle of ${fmtInt(sum.nodes_total)} nodes · ${fmtInt(sum.jobs_running)} running · ${fmtInt(sum.jobs_pending)} queued (all users)`),
           el("span", { class: "legend" }, ...["idle", "mixed", "allocated", "unavailable"].map((k) => el("span", { class: k }, k === "unavailable" ? "down/drained" : k))),
         );
       }
+      if (sum && sum.threads_per_core > 1) head.append(el("span", { class: "load-filter", title: "sinfo reports CPUs as hardware threads here; the table shows physical cores" }, `Slurm counts ${sum.threads_per_core} threads per core here; shown as cores`));
       if (c.filter && c.filter.length) head.append(el("span", { class: "load-filter" }, `partitions: ${c.filter.join(", ")}`));
       if (c.fetched_at) head.append(el("span", { class: "load-filter" }, `as of ${clock(c.fetched_at)}`));
       box.append(head);
@@ -347,7 +348,7 @@
       const table = el("table", { class: "parts" },
         el("thead", {}, el("tr", {},
           el("th", {}, "Partition"), el("th", {}, "Nodes"), el("th", { class: "num" }, "Free nodes"), el("th", { class: "num" }, "Total"),
-          el("th", { class: "num" }, "Free CPUs"), el("th", { class: "num" }, "Max time"),
+          el("th", { class: "num", title: "physical cores: idle / total" }, "Free cores"), el("th", { class: "num" }, "Max time"),
           el("th", { class: "num" }, "Running"), el("th", { class: "num" }, "Queued"), el("th", { class: "num" }, "Nodes wanted"))),
         el("tbody", {}, ...c.partitions.map((p) => partitionRow(p))));
       box.append(table);
@@ -369,7 +370,8 @@
         seg("idle"), seg("mixed"), seg("allocated"), seg("unavailable"))),
       el("td", { class: `num free ${n.idle ? "" : "none"}` }, fmtInt(n.idle)),
       el("td", { class: "num" }, fmtInt(n.total)),
-      el("td", { class: "num" }, `${fmtInt(p.cpus.idle)} / ${fmtInt(p.cpus.total)}`),
+      el("td", { class: "num", title: p.threads_per_core > 1 ? `${fmtInt(p.cpus.idle)} / ${fmtInt(p.cpus.total)} Slurm CPUs (${p.threads_per_core} threads per core)` : "" },
+        `${fmtInt((p.cores || p.cpus).idle)} / ${fmtInt((p.cores || p.cpus).total)}`),
       el("td", { class: "num" }, fmtLimit(p.time_limit_s)),
       el("td", { class: "num" }, fmtInt(p.jobs.running)),
       el("td", { class: `num pressure ${pressure}` }, fmtInt(p.jobs.pending)),

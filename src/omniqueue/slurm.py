@@ -87,7 +87,7 @@ MARK = "@@OMNIQUEUE"
 
 
 # cluster load: node states per partition and queue pressure from all users
-SINFO_FIELDS = "%P|%a|%D|%T|%C|%l"  # partition, avail, nodes, state, cpus A/I/O/T, time limit
+SINFO_FIELDS = "%P|%a|%D|%T|%C|%l|%z"  # partition, avail, nodes, state, cpus A/I/O/T, time limit, S:C:T
 SQUEUE_ALL_FIELDS = "%P|%T|%D|%C"  # partition, state, nodes, cpus (every user)
 
 
@@ -164,6 +164,8 @@ def parse_load(sinfo_out: str, squeue_all_out: str) -> list[dict]:
             "partition": name, "default": False, "avail": "up", "time_limit_s": None,
             "nodes": {"idle": 0, "mixed": 0, "allocated": 0, "unavailable": 0, "total": 0},
             "cpus": {"allocated": 0, "idle": 0, "other": 0, "total": 0},
+            "threads_per_core": 1,  # >1 when Slurm counts hyperthreads as CPUs (e.g. LUMI: 2)
+            "cores": {"allocated": 0, "idle": 0, "other": 0, "total": 0},
             "jobs": {"running": 0, "pending": 0},
             "pending_nodes": 0, "pending_cpus": 0, "running_nodes": 0,
         })
@@ -173,8 +175,15 @@ def parse_load(sinfo_out: str, squeue_all_out: str) -> list[dict]:
         if len(cols) < 6:
             continue
         raw_name, avail, nodes, state, cpus, limit = (c.strip() for c in cols[:6])
+        sct = cols[6].strip() if len(cols) > 6 else ""
         name = raw_name.rstrip("*")
         p = part(name)
+        try:  # %z is sockets:cores:threads; the thread count says what a Slurm CPU is
+            tpc = int(sct.split(":")[2])
+            if tpc > 1:
+                p["threads_per_core"] = max(p["threads_per_core"], tpc)
+        except (IndexError, ValueError):
+            pass
         p["default"] = p["default"] or raw_name.endswith("*")
         p["avail"] = avail or p["avail"]
         p["time_limit_s"] = parse_duration(limit) if p["time_limit_s"] is None else p["time_limit_s"]
@@ -193,6 +202,10 @@ def parse_load(sinfo_out: str, squeue_all_out: str) -> list[dict]:
         p["cpus"]["other"] += o
         p["cpus"]["total"] += t
 
+    for p in parts.values():
+        tpc = p["threads_per_core"]
+        p["cores"] = {k: v // tpc for k, v in p["cpus"].items()}
+
     for line in squeue_all_out.splitlines():
         cols = line.split("|")
         if len(cols) < 4:
@@ -208,6 +221,8 @@ def parse_load(sinfo_out: str, squeue_all_out: str) -> list[dict]:
                 p["jobs"]["pending"] += 1
                 p["pending_nodes"] += _int(nodes)
                 p["pending_cpus"] += _int(cpus)
+    for p in parts.values():
+        p["pending_cores"] = p["pending_cpus"] // p["threads_per_core"]
 
     out = list(parts.values())
     out.sort(key=lambda p: (not p["default"], p["partition"]))
@@ -223,6 +238,9 @@ def summarize_load(partitions: list[dict]) -> dict:
     return {
         "cpus_total": total,
         "cpus_allocated": alloc,
+        "cores_total": sum(p["cores"]["total"] for p in partitions),
+        "cores_allocated": sum(p["cores"]["allocated"] for p in partitions),
+        "threads_per_core": max([p["threads_per_core"] for p in partitions] or [1]),
         "utilisation": (alloc / usable) if usable else None,
         "nodes_idle": sum(p["nodes"]["idle"] for p in partitions),
         "nodes_total": sum(p["nodes"]["total"] for p in partitions),

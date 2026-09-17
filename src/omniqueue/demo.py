@@ -64,7 +64,9 @@ def make_demo_load(cluster: str, rng: random.Random) -> list[dict]:
         "lumi": [("standard", 1400, 128, 2 * 86400, True), ("standard-g", 2500, 64, 2 * 86400, False), ("small", 300, 128, 3 * 86400, False), ("debug", 8, 128, 1800, False)],
     }.get(cluster, [("batch", 500, 64, 86400, True)])
     out = []
+    tpc = 2 if cluster == "lumi" else 1
     for name, nodes, cpn, limit, default in specs:
+        cpn *= tpc
         busy = rng.uniform(0.55, 0.98)
         alloc = int(nodes * busy)
         mixed = int(nodes * rng.uniform(0, 0.08))
@@ -76,8 +78,12 @@ def make_demo_load(cluster: str, rng: random.Random) -> list[dict]:
             "nodes": {"idle": idle, "mixed": mixed, "allocated": alloc, "unavailable": down, "total": nodes},
             "cpus": {"allocated": alloc * cpn + mixed * cpn // 2, "idle": idle * cpn + mixed * cpn // 2,
                      "other": down * cpn, "total": nodes * cpn},
+            "threads_per_core": tpc,
+            "cores": {"allocated": (alloc * cpn + mixed * cpn // 2) // tpc, "idle": (idle * cpn + mixed * cpn // 2) // tpc,
+                      "other": down * cpn // tpc, "total": nodes * cpn // tpc},
             "jobs": {"running": alloc // rng.randint(1, 4) + 1, "pending": pend},
-            "pending_nodes": pend * rng.randint(1, 6), "pending_cpus": pend * cpn, "running_nodes": alloc,
+            "pending_nodes": pend * rng.randint(1, 6), "pending_cpus": pend * cpn, "pending_cores": pend * cpn // tpc,
+            "running_nodes": alloc,
         })
     return out
 

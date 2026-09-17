@@ -3,14 +3,19 @@ import unittest
 from omniqueue.slurm import combined_command, load_command, parse_load, summarize_load
 
 SINFO = """\
-main*|up|1500|allocated|48000/0/0/48000|3-00:00:00
-main*|up|120|idle|0/3840/0/3840|3-00:00:00
-main*|up|40|mixed|640/640/0/1280|3-00:00:00
-main*|up|12|drained|0/0/384/384|3-00:00:00
-main*|up|3|down*|0/0/96/96|3-00:00:00
-gpu|up|30|allocated|3840/0/0/3840|1-00:00:00
-gpu|up|2|idle|0/256/0/256|1-00:00:00
-debug|down|4|idle|0/128/0/128|30:00
+main*|up|1500|allocated|48000/0/0/48000|3-00:00:00|2:16:1
+main*|up|120|idle|0/3840/0/3840|3-00:00:00|2:16:1
+main*|up|40|mixed|640/640/0/1280|3-00:00:00|2:16:1
+main*|up|12|drained|0/0/384/384|3-00:00:00|2:16:1
+main*|up|3|down*|0/0/96/96|3-00:00:00|2:16:1
+gpu|up|30|allocated|3840/0/0/3840|1-00:00:00|2:64:1
+gpu|up|2|idle|0/256/0/256|1-00:00:00|2:64:1
+debug|down|4|idle|0/128/0/128|30:00|2:16:1
+"""
+# LUMI-style: Slurm counts two hardware threads per core
+SINFO_THREADS = """\
+small|up|2|idle|0/512/0/512|3-00:00:00|2:64:2
+small|up|4|mixed|124/900/0/1024|3-00:00:00|2:64:2
 """
 SQUEUE_ALL = """\
 main|RUNNING|4|128
@@ -48,6 +53,21 @@ class LoadParsing(unittest.TestCase):
         self.assertEqual(summary["jobs_pending"], 3 + 2)
         self.assertAlmostEqual(summary["utilisation"], (48640 + 3840) / (48000 + 3840 + 1280 + 3840 + 256 + 128), places=6)
         self.assertIsNone(summarize_load([])["utilisation"])
+
+    def test_threads_are_converted_to_cores(self):
+        (p,) = parse_load(SINFO_THREADS, "")
+        self.assertEqual(p["threads_per_core"], 2)
+        self.assertEqual(p["cpus"]["idle"], 1412)  # what sinfo says
+        self.assertEqual(p["cores"]["idle"], 706)  # what a human expects
+        self.assertEqual(p["cores"]["total"], 768)  # 6 nodes x 128 cores
+        self.assertEqual(p["nodes"]["idle"], 2)
+        summary = summarize_load([p])
+        self.assertEqual(summary["threads_per_core"], 2)
+        self.assertEqual(summary["cores_total"], 768)
+        # clusters that count cores are unchanged
+        main = {q["partition"]: q for q in parse_load(SINFO, "")}["main"]
+        self.assertEqual(main["threads_per_core"], 1)
+        self.assertEqual(main["cores"], main["cpus"])
 
     def test_garbage_tolerated(self):
         self.assertEqual(parse_load("slurm_load_partitions: error\n", "nonsense"), [])
