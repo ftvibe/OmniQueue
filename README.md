@@ -80,8 +80,14 @@ exchange or login prompt. The master closes itself after `persist_seconds`
 (default 4 h) without use. One poll is exactly one ssh session per cluster:
 `squeue` and `sacct` run in the same remote shell.
 
-Polls run ssh in batch mode and never prompt. If a cluster needs a password or
-a one-time code, open the master by hand first:
+The workflow is always **login, monitor, logout**. Polls never open a
+connection themselves: a cluster without one shows "not logged in" in the
+dashboard until you run `omniqueue login` for it, and `omniqueue logout`
+closes the connections and stops the polling again. Nothing reconnects behind
+your back. (Set `connect_on_poll = true` if you would rather have key-based
+clusters reconnect automatically.)
+
+Open the connections:
 
 ```sh
 omniqueue login            # all clusters that are not connected yet
@@ -90,7 +96,8 @@ omniqueue logout           # close all connections now
 omniqueue logout dardel    # close one
 ```
 
-You type the password/OTP once; the poller reuses that connection afterwards.
+You type the password/OTP once where needed; the poller reuses that connection
+afterwards.
 Ctrl-C during `login` cancels the attempt cleanly. `logout` first asks the
 master to exit; a master hung on a dead link ignores that, so it is then
 killed and its socket removed, and `login` does the same clean-up before

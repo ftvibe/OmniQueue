@@ -83,9 +83,11 @@ def cmd_serve(args) -> int:
         threading.Timer(0.5, webbrowser.open, args=(url,)).start()
     if cfg.persist_connections and not getattr(args, "demo", False):
         cold = [c.name for c in cfg.enabled_clusters if not c.is_local and not connection_alive(c, cfg)]
-        if cold:
+        if cold and cfg.connect_on_poll:
             print(f"no open ssh connection yet for: {', '.join(cold)} (first poll opens one; "
                   f"if a password or 2FA code is needed run `omniqueue login` first)")
+        elif cold:
+            print(f"not logged in: {', '.join(cold)}  -> run `omniqueue login` to start polling them")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -95,7 +97,7 @@ def cmd_serve(args) -> int:
         server.server_close()
     if cfg.persist_connections and not getattr(args, "demo", False):
         hours = cfg.persist_seconds / 3600
-        print(f"ssh connections stay open for up to {hours:g} h; run `omniqueue logout` to close them now")
+        print(f"ssh connections stay open for up to {hours:g} h; run `omniqueue logout` to close them")
     return 0
 
 
@@ -193,6 +195,8 @@ def cmd_check(args) -> int:
             n = sum(c["counts"].values())
             warn = f"  (warning: {c['warning']})" if c.get("warning") else ""
             print(f"[ok]    {c['name']:<16} {n} jobs in {c['poll_seconds']:.1f}s{warn}")
+        elif c.get("error_kind") == "login":
+            print(f"[login] {c['name']:<16} not logged in; run `omniqueue login {c['name']}`")
         else:
             failed += 1
             hint = ""

@@ -151,6 +151,41 @@ class ConnectionStateTests(unittest.TestCase):
             self.assertIsNone({c["name"]: c for c in col.snapshot()["clusters"]}["far"]["connected"])
 
 
+class LoginGateTests(unittest.TestCase):
+    def test_polls_only_ride_on_login_connections(self):
+        from omniqueue import collector as collector_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Config(clusters=[ClusterConfig(name="far", host="far.example")], data_dir=Path(tmp))
+            col = Collector(cfg, HistoryStore(Path(tmp) / "h.json"))
+            # no master open -> no ssh is run, the card says "not logged in"
+            with mock.patch.object(collector_mod, "connection_alive", return_value=False), \
+                 mock.patch.object(collector_mod, "run_on_cluster") as run:
+                col.refresh()
+                run.assert_not_called()
+            snap = col.snapshot()
+            st = snap["clusters"][0]
+            self.assertEqual(st["error_kind"], "login")
+            self.assertEqual(st["failures"], 0)
+            self.assertFalse(snap["offline"])
+            self.assertEqual(col.next_delay(), cfg.refresh_seconds)
+            # a master opened by `login` -> the poll runs
+            from omniqueue.ssh import CommandResult
+            with mock.patch.object(collector_mod, "connection_alive", return_value=True), \
+                 mock.patch.object(collector_mod, "run_on_cluster",
+                                   return_value=CommandResult("@@OMNIQUEUE squeue rc=0\n@@OMNIQUEUE sacct rc=0\n", "", 0)) as run:
+                col.refresh()
+                run.assert_called_once()
+            self.assertTrue(col.snapshot()["clusters"][0]["ok"])
+            # connect_on_poll = true restores automatic connections
+            cfg.connect_on_poll = True
+            with mock.patch.object(collector_mod, "connection_alive", return_value=False), \
+                 mock.patch.object(collector_mod, "run_on_cluster",
+                                   return_value=CommandResult("@@OMNIQUEUE squeue rc=0\n@@OMNIQUEUE sacct rc=0\n", "", 0)) as run:
+                col.refresh()
+                run.assert_called_once()
+
+
 class CloseConnectionTests(unittest.TestCase):
     def test_stale_socket_is_removed_and_master_killed(self):
         from omniqueue import ssh as ssh_mod
@@ -227,7 +262,8 @@ class ResilienceTests(unittest.TestCase):
             from omniqueue import collector as collector_mod
             from omniqueue.ssh import RemoteError
 
-            with mock.patch.object(collector_mod, "run_on_cluster", side_effect=RemoteError("timed out after 3s", kind="timeout")), \
+            with mock.patch.object(collector_mod, "connection_alive", return_value=True), \
+                 mock.patch.object(collector_mod, "run_on_cluster", side_effect=RemoteError("timed out after 3s", kind="timeout")), \
                  mock.patch.object(collector_mod, "close_connection") as closed:
                 col.refresh()
             closed.assert_called_once()
@@ -237,7 +273,8 @@ class ResilienceTests(unittest.TestCase):
             self.assertEqual(st["failures"], 1)
             self.assertTrue(snap["offline"])
 
-            with mock.patch.object(collector_mod, "run_on_cluster",
+            with mock.patch.object(collector_mod, "connection_alive", return_value=True), \
+                 mock.patch.object(collector_mod, "run_on_cluster",
                                    side_effect=RemoteError("ssh failed: Permission denied (publickey)", kind="auth")), \
                  mock.patch.object(collector_mod, "close_connection") as closed:
                 col.refresh()

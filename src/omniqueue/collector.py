@@ -57,6 +57,12 @@ class Collector:
         self._conn_cache: dict[str, tuple[float, bool]] = {}
         self.conn_cache_seconds = 10.0
 
+    def _needs_login(self, cluster: ClusterConfig) -> bool:
+        if cluster.is_local or not self.config.persist_connections or self.config.connect_on_poll:
+            return False
+        self._conn_cache.pop(cluster.name, None)  # decide on a fresh check, not a cached one
+        return not self.connected(cluster)
+
     def connected(self, cluster: ClusterConfig) -> bool | None:
         """Whether a persistent ssh master for this cluster is open right now.
 
@@ -92,6 +98,13 @@ class Collector:
     # -- one cluster -----------------------------------------------------------
     def poll_cluster(self, cluster: ClusterConfig) -> tuple[list[Job], ClusterStatus]:
         status = self._status[cluster.name]
+        if self._needs_login(cluster):
+            # login -> monitor -> logout: polls only ride on a connection `omniqueue login` opened
+            status.ok = False
+            status.error = "not logged in"
+            status.error_kind = "login"
+            status.failures = 0  # nothing changes until the user acts: no retry backoff
+            return self.history.jobs_for(cluster.name), status
         status.last_attempt = time.time()
         t0 = time.monotonic()
         warnings: list[str] = []
@@ -208,12 +221,13 @@ class Collector:
         for j in jobs:
             j["exit_summary"] = _exit_summary(j)
         reachable = sum(1 for c in clusters if c["ok"])
+        active = [c for c in clusters if c.get("error_kind") != "login"]
         return {
             "now": time.time(),
             "last_refresh": self.last_refresh,
             "next_refresh": self.next_refresh,
             "refreshing": self.refreshing,
-            "offline": bool(clusters) and reachable == 0 and self.last_refresh is not None,
+            "offline": bool(active) and reachable == 0 and self.last_refresh is not None,
             "refresh_seconds": self.config.refresh_seconds,
             "lookback_hours": self.config.lookback_hours,
             "history_days": self.config.history_days,

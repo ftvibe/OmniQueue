@@ -51,6 +51,7 @@ class Config:
     ssh_timeout: int = 20
     persist_connections: bool = True  # keep one ssh master connection per cluster open between polls
     persist_seconds: int = 4 * 3600  # how long an idle master connection stays open
+    connect_on_poll: bool = False  # False: polls only use connections opened by `omniqueue login`
     accept_new_host_keys: bool = False  # polls trust unknown host keys (TOFU) when true; default requires known_hosts
     allow_remote: bool = False  # permit listen_host other than loopback (needs access_token)
     access_token: str | None = None  # required by every request when listening beyond loopback
@@ -99,6 +100,8 @@ history_days    = 30      # finished jobs stay in the local history this long
 ssh_timeout     = 20      # seconds before a hanging ssh is given up on
 persist_connections = true   # keep one ssh connection per cluster open between polls
 persist_seconds = 14400      # ... for this long after the last poll (4 h); set false above to disable
+connect_on_poll = false      # polls never open connections themselves: `omniqueue login` opens them,
+                             # `omniqueue logout` closes them. true = reconnect automatically (keys only)
 accept_new_host_keys = false # polls only talk to hosts already in ~/.ssh/known_hosts;
                              # `omniqueue login` lets you verify a new fingerprint interactively
 keepalive_seconds = 15       # notice a dead connection (new wifi, sleep) within ~45 s
@@ -243,7 +246,7 @@ def config_from_dict(raw: dict) -> Config:
                 setattr(cfg, key, int(raw[key]))
             except (TypeError, ValueError) as exc:
                 raise ConfigError(f"`{key}` must be an integer.") from exc
-    for key in ("persist_connections", "accept_new_host_keys", "allow_remote"):
+    for key in ("persist_connections", "accept_new_host_keys", "allow_remote", "connect_on_poll"):
         if key in raw:
             setattr(cfg, key, bool(raw[key]))
     if "access_token" in raw:
