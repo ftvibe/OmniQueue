@@ -100,13 +100,13 @@ for y in range(24, 40):
 # (controls..., curl centre, turns, clockwise)
 ARMS = [
     # (controls..., ball centre, turns, clockwise, gap). turns = 0 -> no curl, the ball sits at the tip
-    ([(23, 34), (15, 29), (9, 21), (8, 14)], (9, 8), 1.0, True, 1.0),        # up-left: curls round the ball
-    ([(33, 33), (40, 27), (45, 19), (47, 12)], (49, 8), 0, False, 0),        # up-right: straight reach
-    ([(21, 37), (12, 38), (5, 34), (3, 28)], (5, 23), 0.45, True, 1.2),      # left: gentle hook
-    ([(35, 37), (43, 38), (49, 34), (52, 29)], (53, 25), 0, False, 0),       # right: straight, slightly raised
-    ([(22, 39), (15, 44), (9, 49), (4, 51)], (5, 46), 0.9, False, 1.0),      # down-left outer: curls
-    ([(34, 39), (41, 44), (47, 48), (51, 51)], (54, 53), 0, True, 0),        # down-right outer: trails straight
-    ([(26, 40), (24, 46), (19, 51), (13, 53)], (16, 49), 0.35, True, 1.3),   # down-left inner: slight bend
+    ([(23, 34), (15, 29), (9, 21), (6, 13)], (5, 9), 0, True, 0),            # up-left: straight reach up
+    ([(33, 33), (40, 27), (46, 20), (48, 13)], (47, 7), 1.0, False, 1.0),    # up-right: curls round the ball
+    ([(21, 37), (12, 38), (5, 35), (2, 30)], (2, 26), 0, True, 0),           # left: straight, tip lifts
+    ([(35, 37), (43, 38), (50, 34), (53, 28)], (50, 23), 0.55, False, 1.2),  # right: hook
+    ([(22, 39), (15, 44), (9, 48), (4, 51)], (2, 53), 0, False, 0),          # down-left outer: long straight sweep
+    ([(34, 39), (41, 44), (47, 48), (51, 51)], (48, 54), 0.35, True, 1.3),   # down-right outer: slight bend
+    ([(26, 40), (24, 46), (20, 51), (14, 53)], (17, 49), 0.95, True, 1.0),   # down-left inner: curls
     ([(30, 40), (32, 46), (32, 51), (31, 54)], (30, 57), 0, False, 0),       # down-right inner: hangs down
 ]
 for controls, centre, turns, cw, gap in ARMS:
