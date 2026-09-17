@@ -107,6 +107,45 @@ kbd { font: 11px var(--mono); background: var(--surface-2); border: 1px solid va
 .tabs button.c-ok.active { border-bottom-color: var(--ok); }
 
 main { padding: 0 20px 24px; overflow-x: auto; }
+.tabs-spacer { flex: 1; }
+.tabs button.view-toggle { color: var(--ink-2); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; margin-bottom: 6px; }
+.tabs button.view-toggle.active, .tabs button.view-toggle:hover { color: var(--ink); border-color: var(--accent); }
+.tabs button.view-toggle kbd { margin-left: 4px; }
+
+/* ---- cluster load view ---- */
+.load { padding: 16px 20px 24px; display: grid; gap: 16px; }
+.load-cluster { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--card-color, var(--border)); border-radius: 8px; box-shadow: var(--shadow); overflow: hidden; }
+.load-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+.load-head b { font-size: 15px; }
+.load-head .gauge { display: inline-flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: 13px; }
+.gauge-bar { width: 140px; height: 10px; border-radius: 5px; background: var(--surface-2); overflow: hidden; }
+.gauge-bar i { display: block; height: 100%; background: var(--running); }
+.gauge-bar.hot i { background: var(--problem); }
+.load-head .muted { font-size: 12px; }
+table.parts { width: 100%; border-collapse: collapse; }
+.parts th { text-align: left; font-weight: 600; color: var(--ink-2); font-size: 12px; text-transform: uppercase; letter-spacing: .4px; padding: 8px 12px; background: var(--surface-2); border-bottom: 1px solid var(--border); white-space: nowrap; }
+.parts td { padding: 8px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; vertical-align: middle; font-variant-numeric: tabular-nums; }
+.parts tr:last-child td { border-bottom: none; }
+.parts th.num, .parts td.num { text-align: right; }
+.parts td.free { font-weight: 700; }
+.parts td.free.none { color: var(--muted); font-weight: 400; }
+.parts .default-tag { color: var(--muted); font-size: 11px; margin-left: 6px; }
+.parts .down-tag { color: var(--problem); font-size: 11px; margin-left: 6px; }
+.stack { display: flex; width: 220px; height: 12px; border-radius: 4px; overflow: hidden; background: var(--surface-2); }
+.stack i { display: block; height: 100%; }
+.stack .idle { background: var(--ok); }
+.stack .mixed { background: var(--pending); }
+.stack .allocated { background: var(--running); opacity: .85; }
+.stack .unavailable { background: var(--problem); opacity: .7; }
+.legend { display: flex; gap: 14px; font-size: 12px; color: var(--ink-2); flex-wrap: wrap; }
+.legend span::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.legend .idle::before { background: var(--ok); }
+.legend .mixed::before { background: var(--pending); }
+.legend .allocated::before { background: var(--running); opacity: .85; }
+.legend .unavailable::before { background: var(--problem); opacity: .7; }
+.load-empty { padding: 14px; color: var(--muted); font-size: 13px; }
+.pressure { color: var(--ink-2); }
+.pressure.high { color: var(--problem); font-weight: 600; }
 table.jobs { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .jobs th { text-align: left; font-weight: 600; color: var(--ink-2); font-size: 12px; text-transform: uppercase; letter-spacing: .4px;
   padding: 9px 10px; border-bottom: 1px solid var(--border); background: var(--surface-2); cursor: pointer; user-select: none; white-space: nowrap; }

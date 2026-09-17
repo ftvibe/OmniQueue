@@ -85,14 +85,24 @@ class LocalClusterEndToEnd(unittest.TestCase):
         return Collector(cfg, HistoryStore(Path(self.tmp.name) / "h.json"))
 
     def test_happy_path(self):
-        _fake_bin(self.bin, "squeue", f"case \"$*\" in *--user=tester*) ;; *) echo bad user >&2; exit 9;; esac\ncat <<'X'\n{SQUEUE_OUT}X\n")
+        _fake_bin(self.bin, "squeue",
+                  "case \"$*\" in\n"
+                  "  *--states=RUNNING,PENDING*) printf 'main|RUNNING|4|128\\nmain|PENDING|2|64\\n' ;;\n"
+                  f"  *--user=tester*) cat <<'X'\n{SQUEUE_OUT}X\n ;;\n"
+                  "  *) echo bad user >&2; exit 9 ;;\n"
+                  "esac\n")
         _fake_bin(self.bin, "sacct", f"cat <<'X'\n{SACCT_OUT}X\n")
+        _fake_bin(self.bin, "sinfo", "printf 'main*|up|10|allocated|320/0/0/320|1-00:00:00\\nmain*|up|3|idle|0/96/0/96|1-00:00:00\\n'\n")
         col = self._collector()
         col.refresh()
         snap = col.snapshot()
         status = snap["clusters"][0]
         self.assertTrue(status["ok"], status)
         self.assertIsNone(status["warning"])
+        self.assertEqual(len(status["partitions"]), 1)
+        self.assertEqual(status["partitions"][0]["nodes"]["idle"], 3)
+        self.assertEqual(status["partitions"][0]["jobs"], {"running": 1, "pending": 1})
+        self.assertEqual(status["load"]["nodes_total"], 13)
         self.assertEqual(status["counts"], {"running": 1, "pending": 2, "ok": 1, "problem": 4, "unknown": 0})
         self.assertEqual(len(snap["jobs"]), 8)
 

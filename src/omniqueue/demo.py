@@ -57,6 +57,31 @@ def make_demo_jobs(cluster: str, rng: random.Random, n: int = 18) -> list[Job]:
     return jobs
 
 
+def make_demo_load(cluster: str, rng: random.Random) -> list[dict]:
+    specs = {
+        "tetralith": [("main", 1800, 32, 3 * 86400, True), ("large", 60, 32, 7 * 86400, False), ("gpu", 40, 128, 86400, False)],
+        "dardel": [("main", 1200, 128, 86400, True), ("shared", 200, 128, 86400, False), ("gpu", 56, 64, 86400, False), ("long", 96, 128, 7 * 86400, False)],
+        "lumi": [("standard", 1400, 128, 2 * 86400, True), ("standard-g", 2500, 64, 2 * 86400, False), ("small", 300, 128, 3 * 86400, False), ("debug", 8, 128, 1800, False)],
+    }.get(cluster, [("batch", 500, 64, 86400, True)])
+    out = []
+    for name, nodes, cpn, limit, default in specs:
+        busy = rng.uniform(0.55, 0.98)
+        alloc = int(nodes * busy)
+        mixed = int(nodes * rng.uniform(0, 0.08))
+        down = int(nodes * rng.uniform(0, 0.04))
+        idle = max(0, nodes - alloc - mixed - down)
+        pend = rng.randint(0, 400)
+        out.append({
+            "partition": name, "default": default, "avail": "up", "time_limit_s": limit,
+            "nodes": {"idle": idle, "mixed": mixed, "allocated": alloc, "unavailable": down, "total": nodes},
+            "cpus": {"allocated": alloc * cpn + mixed * cpn // 2, "idle": idle * cpn + mixed * cpn // 2,
+                     "other": down * cpn, "total": nodes * cpn},
+            "jobs": {"running": alloc // rng.randint(1, 4) + 1, "pending": pend},
+            "pending_nodes": pend * rng.randint(1, 6), "pending_cpus": pend * cpn, "running_nodes": alloc,
+        })
+    return out
+
+
 class DemoCollector(Collector):
     """A Collector that fabricates data instead of talking to clusters."""
 
@@ -78,6 +103,10 @@ class DemoCollector(Collector):
             status.failures += 1
             return [], status
         jobs = make_demo_jobs(cluster.name, self._rng)
+        status.partitions = make_demo_load(cluster.name, self._rng)
+        from .slurm import summarize_load
+
+        status.load = summarize_load(status.partitions)
         status.ok = True
         status.error = None
         status.last_success = time.time()

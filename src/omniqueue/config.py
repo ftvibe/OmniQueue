@@ -33,6 +33,7 @@ class ClusterConfig:
     squeue_args: list[str] = field(default_factory=list)
     sacct_args: list[str] = field(default_factory=list)
     use_sacct: bool = True
+    show_load: bool = True  # also fetch sinfo + an all-users squeue for the cluster load view
     enabled: bool = True
     color: str | None = None  # optional accent colour for the dashboard
     logo: str | None = None  # image file path or http(s) URL shown on the cluster card
@@ -119,6 +120,7 @@ host = "tetralith"               # ssh alias
 # squeue_args = ["--partition=main"]
 # sacct_args  = ["--account=naiss2024-1-23"]
 # use_sacct = true               # set false on clusters without job accounting
+# show_load = true               # sinfo + all-users squeue for the load view (l); false to skip
 # color = "#5f9e99"
 # logo = "~/Pictures/nsc.png"    # or drop <name>.png/.svg into ~/.config/omniqueue/logos/
 

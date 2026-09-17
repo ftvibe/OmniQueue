@@ -19,6 +19,7 @@
     selected: null,
     error: null,
     matches: new Map(), // job key -> fuzzy match info for the current search
+    view: prefs.view || "jobs", // "jobs" | "load"
   };
 
   // ---------- helpers ----------
@@ -28,7 +29,7 @@
   function savePrefs() {
     try {
       localStorage.setItem("omniqueue.prefs", JSON.stringify({
-        tab: state.tab, sort: state.sort, hiddenClusters: [...state.hiddenClusters], windowHours: state.windowHours,
+        tab: state.tab, sort: state.sort, hiddenClusters: [...state.hiddenClusters], windowHours: state.windowHours, view: state.view,
       }));
     } catch { /* ignore */ }
   }
@@ -239,8 +240,91 @@
     renderHeader();
     renderClusters();
     renderTabs();
-    renderTable();
+    renderView();
     if (state.selected) renderDrawer();
+  }
+
+  function renderView() {
+    const load = state.view === "load";
+    $("#load").hidden = !load;
+    $("#jobs-view").hidden = load;
+    $("#view-toggle").classList.toggle("active", load);
+    $("#view-toggle").firstChild.textContent = load ? "my jobs " : "cluster load ";
+    for (const b of $$("#tabs button[data-tab]")) b.disabled = load;
+    if (load) renderLoad(); else renderTable();
+  }
+
+  function toggleView() {
+    state.view = state.view === "load" ? "jobs" : "load";
+    savePrefs();
+    renderView();
+  }
+
+  // ---------- cluster load view ----------
+  const fmtInt = (n) => (n === null || n === undefined) ? "–" : Number(n).toLocaleString("en").replace(/,/g, " ");
+  function fmtLimit(s) {
+    if (!s) return "–";
+    if (s % 86400 === 0) return `${s / 86400} d`;
+    if (s % 3600 === 0) return `${s / 3600} h`;
+    return fmtDuration(s);
+  }
+
+  function renderLoad() {
+    const root = $("#load");
+    root.replaceChildren();
+    const snap = state.snapshot;
+    if (!snap) return;
+    for (const c of snap.clusters) {
+      if (state.hiddenClusters.has(c.name)) continue;
+      const box = el("section", { class: "load-cluster", style: `--card-color:${clusterColor(c.name)}` });
+      const head = el("div", { class: "load-head" }, logoEl(c), el("b", {}, c.name));
+      if (c.load && c.load.utilisation !== null && c.load.utilisation !== undefined) {
+        const pct = Math.round(c.load.utilisation * 100);
+        head.append(
+          el("span", { class: "gauge", title: `${fmtInt(c.load.cpus_allocated)} of ${fmtInt(c.load.cpus_total)} CPUs allocated` },
+            el("span", { class: `gauge-bar ${pct >= 90 ? "hot" : ""}` }, el("i", { style: `width:${pct}%` })), `${pct}% CPUs busy`),
+          el("span", { class: "muted" }, `${fmtInt(c.load.nodes_idle)} idle of ${fmtInt(c.load.nodes_total)} nodes · ${fmtInt(c.load.jobs_running)} running · ${fmtInt(c.load.jobs_pending)} queued (all users)`),
+          el("span", { class: "legend" }, ...["idle", "mixed", "allocated", "unavailable"].map((k) => el("span", { class: k }, k === "unavailable" ? "down/drained" : k))),
+        );
+      }
+      box.append(head);
+      if (!c.partitions || !c.partitions.length) {
+        box.append(el("div", { class: "load-empty" },
+          c.ok ? "no partition data (show_load = false or sinfo unavailable)" : (c.error_kind === "login" ? "not logged in" : `not reached: ${c.error || ""}`)));
+        root.append(box);
+        continue;
+      }
+      const table = el("table", { class: "parts" },
+        el("thead", {}, el("tr", {},
+          el("th", {}, "Partition"), el("th", {}, "Nodes"), el("th", { class: "num" }, "Free nodes"), el("th", { class: "num" }, "Total"),
+          el("th", { class: "num" }, "Free CPUs"), el("th", { class: "num" }, "Max time"),
+          el("th", { class: "num" }, "Running"), el("th", { class: "num" }, "Queued"), el("th", { class: "num" }, "Nodes wanted"))),
+        el("tbody", {}, ...c.partitions.map((p) => partitionRow(p))));
+      box.append(table);
+      root.append(box);
+    }
+    if (!root.children.length) root.append(el("div", { class: "load-empty" }, "no clusters to show"));
+  }
+
+  function partitionRow(p) {
+    const n = p.nodes, total = n.total || 1;
+    const seg = (k) => el("i", { class: k, style: `width:${(n[k] / total * 100).toFixed(1)}%`, title: `${n[k]} ${k}` });
+    const wanted = p.pending_nodes;
+    const pressure = n.idle > 0 ? "" : (wanted > 0 ? "high" : "");
+    return el("tr", {},
+      el("td", {}, p.partition,
+        p.default ? el("span", { class: "default-tag" }, "default") : null,
+        p.avail && p.avail !== "up" ? el("span", { class: "down-tag" }, p.avail) : null),
+      el("td", {}, el("span", { class: "stack", title: `${n.idle} idle · ${n.mixed} mixed · ${n.allocated} allocated · ${n.unavailable} down/drained` },
+        seg("idle"), seg("mixed"), seg("allocated"), seg("unavailable"))),
+      el("td", { class: `num free ${n.idle ? "" : "none"}` }, fmtInt(n.idle)),
+      el("td", { class: "num" }, fmtInt(n.total)),
+      el("td", { class: "num" }, `${fmtInt(p.cpus.idle)} / ${fmtInt(p.cpus.total)}`),
+      el("td", { class: "num" }, fmtLimit(p.time_limit_s)),
+      el("td", { class: "num" }, fmtInt(p.jobs.running)),
+      el("td", { class: `num pressure ${pressure}` }, fmtInt(p.jobs.pending)),
+      el("td", { class: `num pressure ${pressure}`, title: "nodes requested by all queued jobs" }, fmtInt(wanted)),
+    );
   }
 
   function renderHeader() {
@@ -346,7 +430,7 @@
         if (counts[k] !== undefined) counts[k]++;
       }
     }
-    for (const b of $$("#tabs button")) {
+    for (const b of $$("#tabs button[data-tab]")) {
       b.classList.toggle("active", b.dataset.tab === state.tab);
       $(".count", b).textContent = counts[b.dataset.tab] ?? 0;
     }
@@ -361,7 +445,8 @@
       th.classList.toggle("desc", th.dataset.sort === state.sort.key && state.sort.desc);
     }
     const rows = jobs.map((j) => {
-      const note = j.category === "pending" ? j.reason : (j.exit_summary || (j.category === "unknown" ? j.reason : ""));
+      let note = j.category === "pending" ? j.reason : (j.exit_summary || (j.category === "unknown" ? j.reason : ""));
+      if (j.category === "pending" && j.start_time) note = `${note ? note + " · " : ""}est. start ${fmtTime(j.start_time)}`;
       const tr = el("tr", { class: state.selected === j.key ? "selected" : "", "data-key": j.key, onclick: () => openDrawer(j.key) },
         el("td", {}, el("span", { class: "cl", style: `--card-color:${clusterColor(j.cluster)}` }, j.cluster)),
         el("td", { class: "mono" }, highlight(j.job_id, state.matches.get(j.key)?.idPos)),
@@ -446,6 +531,7 @@
   $("#window").value = String(state.windowHours);
   $("#window").addEventListener("change", (e) => { state.windowHours = Number(e.target.value); savePrefs(); render(); });
   $("#drawer-close").addEventListener("click", closeDrawer);
+  $("#view-toggle").addEventListener("click", toggleView);
   $("#tabs").addEventListener("click", (e) => {
     const b = e.target.closest("button[data-tab]");
     if (!b) return;
@@ -463,8 +549,9 @@
     if (e.key === "/") { e.preventDefault(); $("#search").focus(); }
     else if (e.key === "r") requestRefresh();
     else if (e.key === "t") cycleTheme();
+    else if (e.key === "l") toggleView();
     else if (e.key === "Escape") closeDrawer();
-    else if ("12345".includes(e.key)) { const b = $$("#tabs button")[Number(e.key) - 1]; if (b) b.click(); }
+    else if ("12345".includes(e.key)) { const b = $$("#tabs button[data-tab]")[Number(e.key) - 1]; if (b) b.click(); }
   });
 
   fetchState();

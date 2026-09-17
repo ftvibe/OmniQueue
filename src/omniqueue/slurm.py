@@ -86,16 +86,142 @@ def sacct_command(user: str | None, lookback_hours: int, extra_args: list[str] |
 MARK = "@@OMNIQUEUE"
 
 
+# cluster load: node states per partition and queue pressure from all users
+SINFO_FIELDS = "%P|%a|%D|%T|%C|%l"  # partition, avail, nodes, state, cpus A/I/O/T, time limit
+SQUEUE_ALL_FIELDS = "%P|%T|%D|%C"  # partition, state, nodes, cpus (every user)
+
+
+def sinfo_command() -> str:
+    return f"sinfo --noheader --format={shlex.quote(SINFO_FIELDS)}"
+
+
+def squeue_all_command() -> str:
+    return f"squeue --noheader --states=RUNNING,PENDING --format={shlex.quote(SQUEUE_ALL_FIELDS)}"
+
+
 def combined_command(user: str | None, lookback_hours: int, squeue_args: list[str] | None,
-                     sacct_args: list[str] | None, use_sacct: bool) -> str:
-    """squeue and sacct in one remote shell invocation, so a poll costs one ssh round trip.
+                     sacct_args: list[str] | None, use_sacct: bool, load: bool = False) -> str:
+    """squeue and sacct (and, with load=True, sinfo plus an all-users squeue) in one
+    remote shell invocation, so a poll costs one ssh round trip.
 
     Each command is followed by a marker line carrying its exit status.
     """
     parts = [squeue_command(user, squeue_args), f'echo "{MARK} squeue rc=$?"']
     if use_sacct:
         parts += [sacct_command(user, lookback_hours, sacct_args), f'echo "{MARK} sacct rc=$?"']
+    if load:
+        parts += [sinfo_command(), f'echo "{MARK} sinfo rc=$?"',
+                  squeue_all_command(), f'echo "{MARK} squeue_all rc=$?"']
     return "; ".join(parts)
+
+
+# sinfo node states -> the four buckets the dashboard shows
+_STATE_BUCKET = {
+    "idle": "idle",
+    "mixed": "mixed",
+    "allocated": "allocated",
+    "completing": "allocated",
+    "planned": "idle",
+    "reserved": "unavailable",
+    "down": "unavailable",
+    "drained": "unavailable",
+    "draining": "allocated",
+    "fail": "unavailable",
+    "failing": "unavailable",
+    "maint": "unavailable",
+    "future": "unavailable",
+    "unknown": "unavailable",
+    "inval": "unavailable",
+    "perfctrs": "unavailable",
+    "power_down": "unavailable",
+    "powered_down": "unavailable",
+    "powering_down": "unavailable",
+    "powering_up": "idle",
+    "no_respond": "unavailable",
+}
+
+
+def _bucket(state: str) -> str:
+    base = state.strip().lower().rstrip("*~#!%$@^-+")
+    for flag in ("+cloud", "+drain", "+maint", "+reserved"):
+        base = base.replace(flag, "")
+    return _STATE_BUCKET.get(base, "unavailable")
+
+
+def parse_load(sinfo_out: str, squeue_all_out: str) -> list[dict]:
+    """Combine sinfo rows and an all-users squeue into one record per partition."""
+    parts: dict[str, dict] = {}
+
+    def part(name: str) -> dict:
+        return parts.setdefault(name, {
+            "partition": name, "default": False, "avail": "up", "time_limit_s": None,
+            "nodes": {"idle": 0, "mixed": 0, "allocated": 0, "unavailable": 0, "total": 0},
+            "cpus": {"allocated": 0, "idle": 0, "other": 0, "total": 0},
+            "jobs": {"running": 0, "pending": 0},
+            "pending_nodes": 0, "pending_cpus": 0, "running_nodes": 0,
+        })
+
+    for line in sinfo_out.splitlines():
+        cols = line.split("|")
+        if len(cols) < 6:
+            continue
+        raw_name, avail, nodes, state, cpus, limit = (c.strip() for c in cols[:6])
+        name = raw_name.rstrip("*")
+        p = part(name)
+        p["default"] = p["default"] or raw_name.endswith("*")
+        p["avail"] = avail or p["avail"]
+        p["time_limit_s"] = parse_duration(limit) if p["time_limit_s"] is None else p["time_limit_s"]
+        n = _int(nodes)
+        p["nodes"][_bucket(state)] += n
+        p["nodes"]["total"] += n
+        try:
+            a, i, o, t = (int(x) for x in cpus.split("/"))
+        except ValueError:
+            a = i = o = t = 0
+        if _bucket(state) == "unavailable":
+            o += a + i  # cpus on down/drained nodes are not usable
+            a = i = 0
+        p["cpus"]["allocated"] += a
+        p["cpus"]["idle"] += i
+        p["cpus"]["other"] += o
+        p["cpus"]["total"] += t
+
+    for line in squeue_all_out.splitlines():
+        cols = line.split("|")
+        if len(cols) < 4:
+            continue
+        raw_name, state, nodes, cpus = (c.strip() for c in cols[:4])
+        for name in raw_name.split(","):  # a job may list several partitions
+            p = part(name.rstrip("*"))
+            st = normalize_state(state)
+            if st == "RUNNING":
+                p["jobs"]["running"] += 1
+                p["running_nodes"] += _int(nodes)
+            elif st == "PENDING":
+                p["jobs"]["pending"] += 1
+                p["pending_nodes"] += _int(nodes)
+                p["pending_cpus"] += _int(cpus)
+
+    out = list(parts.values())
+    out.sort(key=lambda p: (not p["default"], p["partition"]))
+    return out
+
+
+def summarize_load(partitions: list[dict]) -> dict:
+    """Whole-cluster numbers from the partition records (nodes may appear in several
+    partitions, so this is an upper bound; it is fine for a gauge)."""
+    total = sum(p["cpus"]["total"] for p in partitions)
+    alloc = sum(p["cpus"]["allocated"] for p in partitions)
+    usable = total - sum(p["cpus"]["other"] for p in partitions)
+    return {
+        "cpus_total": total,
+        "cpus_allocated": alloc,
+        "utilisation": (alloc / usable) if usable else None,
+        "nodes_idle": sum(p["nodes"]["idle"] for p in partitions),
+        "nodes_total": sum(p["nodes"]["total"] for p in partitions),
+        "jobs_running": sum(p["jobs"]["running"] for p in partitions),
+        "jobs_pending": sum(p["jobs"]["pending"] for p in partitions),
+    }
 
 
 _MARK_RE = re.compile(rf"^{re.escape(MARK)} (?P<name>\w+) rc=(?P<rc>\d+)\s*$")

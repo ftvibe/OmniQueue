@@ -12,7 +12,7 @@ from typing import Any
 from .config import ClusterConfig, Config
 from .history import HistoryStore
 from .models import Job
-from .slurm import combined_command, merge_jobs, parse_sacct, parse_squeue, split_combined_output
+from .slurm import combined_command, merge_jobs, parse_load, parse_sacct, parse_squeue, split_combined_output, summarize_load
 from .ssh import RemoteError, close_connection, connection_alive, run_on_cluster
 
 log = logging.getLogger("omniqueue.collector")
@@ -33,6 +33,8 @@ class ClusterStatus:
     color: str | None = None
     logo: str | None = None  # URL the dashboard can load
     counts: dict[str, int] = field(default_factory=dict)
+    partitions: list[dict] = field(default_factory=list)  # cluster load per partition
+    load: dict | None = None  # whole-cluster summary
 
     def to_dict(self) -> dict[str, Any]:
         return self.__dict__.copy()
@@ -110,7 +112,7 @@ class Collector:
         warnings: list[str] = []
         try:
             cmd = combined_command(cluster.user, self.config.lookback_hours, cluster.squeue_args,
-                                   cluster.sacct_args, cluster.use_sacct)
+                                   cluster.sacct_args, cluster.use_sacct, load=cluster.show_load)
             res = run_on_cluster(cluster, cmd, self.config.ssh_timeout, self.config)
             sections = split_combined_output(res.stdout)
             stderr = res.stderr.strip()
@@ -130,6 +132,15 @@ class Collector:
                     sacct_jobs = parse_sacct(sa_out, cluster.name)
             elif stderr:
                 warnings.append(stderr[:200])
+
+            if cluster.show_load:
+                si_out, si_rc = sections.get("sinfo", ("", -1))
+                sq_all_out, sq_all_rc = sections.get("squeue_all", ("", -1))
+                if si_rc != 0:
+                    warnings.append(f"sinfo exited {si_rc}: no load view")
+                else:
+                    status.partitions = parse_load(si_out, sq_all_out if sq_all_rc == 0 else "")
+                    status.load = summarize_load(status.partitions)
         except RemoteError as exc:
             status.ok = False
             status.error = str(exc)

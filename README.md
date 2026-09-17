@@ -180,11 +180,21 @@ cluster names from your config, `list --state` the job states.
   limit used. The bar turns coral past 90 %.
 * **Failed jobs** carry a note such as `exit code 1`, `hit time limit`,
   `out of memory` or `cancelled by uid 1234`.
+* **Cluster load** (`l` or the button at the right of the tabs) swaps your jobs
+  for a view of each cluster: CPU utilisation, and per partition the node
+  states as a bar (idle / mixed / allocated / down), free nodes and CPUs, the
+  time limit, and the queue pressure from *all* users: running jobs, queued
+  jobs and how many nodes they are asking for. Free nodes in bold means you
+  can probably start right away; a queue with nodes wanted and no free nodes
+  means a wait. It comes from `sinfo` and an all-users `squeue` in the same
+  poll (`show_load = false` per cluster to skip it).
+* Pending jobs show Slurm's estimated start time in the note when the
+  scheduler has computed one.
 * Click a row for all details (queue wait, node list, work dir, exit code, ...).
   Finished jobs can be removed from the local history from there.
 * Muted teal / coral / mustard palette, dark and light; failed and done never
   rely on a red-green pair. The ◐ button (or `t`) cycles auto / dark / light.
-* Keys: `/` search, `r` refresh now, `t` theme, `1`-`5` tabs, `Esc` close.
+* Keys: `/` search, `r` refresh now, `l` cluster load, `t` theme, `1`-`5` tabs, `Esc` close.
 
 Only the dashboard's own machine can reach it (`listen_host = "127.0.0.1"`).
 If you run OmniQueue on a remote machine, forward the port with
@@ -238,8 +248,12 @@ Per poll and per cluster, OmniQueue runs one remote shell command:
 
 ```
 squeue --noheader --array --user="$USER" --format='%i|%T|...|%j'; echo "@@OMNIQUEUE squeue rc=$?"; \
-sacct  --noheader --parsable2 --allocations --user="$USER" --starttime=<now - lookback> --format=JobID,State,...,JobName; echo "@@OMNIQUEUE sacct rc=$?"
+sacct  --noheader --parsable2 --allocations --user="$USER" --starttime=<now - lookback> --format=JobID,State,...,JobName; echo "@@OMNIQUEUE sacct rc=$?"; \
+sinfo  --noheader --format='%P|%a|%D|%T|%C|%l'; echo "@@OMNIQUEUE sinfo rc=$?"; \
+squeue --noheader --states=RUNNING,PENDING --format='%P|%T|%D|%C'; echo "@@OMNIQUEUE squeue_all rc=$?"
 ```
+
+The last two feed the cluster load view and are skipped with `show_load = false`.
 
 `squeue` is authoritative for anything it lists; `sacct` supplies finished jobs
 and their exit codes. Everything is merged into a JSON history file in
