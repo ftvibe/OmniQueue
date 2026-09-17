@@ -107,6 +107,17 @@ class ServerTests(unittest.TestCase):
         with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/api/load") as r:
             self.assertTrue(r.headers.get("ETag"))
 
+    def test_widget(self):
+        for path in ("/widget", "/widget.html"):
+            status, ctype, body = self.get(path)
+            self.assertEqual(status, 200, path)
+            self.assertIn("text/html", ctype)
+            self.assertIn(b"OmniQueue widget", body)
+            self.assertNotIn(b"__OMNIQUEUE_TOKEN__", body)  # CSRF token substituted like index.html
+        status, _, body = self.get("/widget.js")
+        self.assertEqual(status, 200)
+        self.assertIn(b"Recently", self.get("/widget")[2])
+
     def test_404(self):
         with self.assertRaises(urllib.error.HTTPError) as cm:
             self.get("/../pyproject.toml")

@@ -149,6 +149,8 @@ network change that dropped the connection.
 | `omniqueue init [--force]` | write the example config |
 | `omniqueue completion bash\|zsh\|fish` | print a tab-completion script |
 | `omniqueue --demo ...` | run any command against fabricated clusters |
+
+Dashboard keys: `/` search, `r` refresh now, `l` cluster load, `q` back to jobs, `w` side widget, `t` theme, `1`-`5` tabs, `Esc` close.
 | `omniqueue --config PATH ...` | use another config file |
 
 ## Tab completion
@@ -220,6 +222,25 @@ cluster names from your config, `list --state` the job states.
 Only the dashboard's own machine can reach it (`listen_host = "127.0.0.1"`).
 If you run OmniQueue on a remote machine, forward the port with
 `ssh -L 8765:127.0.0.1:8765 thatmachine` rather than opening it up.
+
+## The side widget
+
+`http://127.0.0.1:8765/widget` is a compact page for a narrow window kept at
+the side of the screen (the **▯ widget** button or `w` in the dashboard opens
+it as a small pop-up). It shows one line per cluster with running / queued /
+failed / done counts and the ssh state, an **Alerts** list of jobs that
+failed, timed out, ran out of memory, lost a node or were cancelled in the
+last 48 h (dismiss them one by one or all at once), then the most recently
+started jobs with elapsed time against their limit and the most recently
+finished ones with how long they took.
+
+The widget re-reads the server every 10 minutes (the server keeps polling at
+its own `refresh_seconds`), and not at all while hidden. `↻` polls the
+clusters right now. Click the bell to allow browser notifications: a new
+crashed or timed-out job then pops up a system notification even when the
+window is behind others. Query parameters tune it:
+`/widget?refresh=300&alerts=24&n=8` re-reads every 5 min, alerts on the last
+24 h and lists 8 jobs per section.
 
 ## Security notes
 

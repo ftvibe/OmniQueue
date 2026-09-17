@@ -17,7 +17,7 @@ from .collector import Collector
 
 log = logging.getLogger("omniqueue.server")
 
-STATIC_FILES = {"", "index.html", "app.js", "theme.js", "style.css", "favicon.svg", "logo.svg", "logo_text.svg", "logo_text_dark.svg"}
+STATIC_FILES = {"", "index.html", "widget", "widget.html", "widget.js", "app.js", "theme.js", "style.css", "favicon.svg", "logo.svg", "logo_text.svg", "logo_text_dark.svg"}
 
 
 def _static(name: str) -> bytes:
@@ -111,6 +111,8 @@ class Handler(BaseHTTPRequestHandler):
             self._logo(path[len("/logo/"):])
             return
         name = path.lstrip("/") or "index.html"
+        if name == "widget":
+            name = "widget.html"
         if name in STATIC_FILES:
             ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
             try:
@@ -118,7 +120,7 @@ class Handler(BaseHTTPRequestHandler):
             except FileNotFoundError:
                 self._json({"error": "missing static file"}, HTTPStatus.INTERNAL_SERVER_ERROR)
                 return
-            if name == "index.html":
+            if name in ("index.html", "widget.html"):
                 body = body.replace(b"__OMNIQUEUE_TOKEN__", self.csrf_token.encode())
             self._send(HTTPStatus.OK, body, f"{ctype}; charset=utf-8")
             return

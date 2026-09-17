@@ -597,6 +597,10 @@
   $("#window").value = String(state.windowHours);
   $("#window").addEventListener("change", (e) => { state.windowHours = Number(e.target.value); savePrefs(); render(); });
   $("#drawer-close").addEventListener("click", closeDrawer);
+  function openWidget() {
+    window.open("/widget", "omniqueue-widget", "popup=yes,width=380,height=760,menubar=no,toolbar=no,location=no,status=no");
+  }
+  $("#widget-open").addEventListener("click", openWidget);
   $("#view-toggle").addEventListener("click", () => (state.view === "load" ? refreshLoad() : enterLoadView()));
   $("#load-refresh").addEventListener("click", refreshLoad);
   $("#load-back").addEventListener("click", leaveLoadView);
@@ -619,6 +623,7 @@
     else if (e.key === "t") cycleTheme();
     else if (e.key === "l") { if (state.view === "load") refreshLoad(); else enterLoadView(); }
     else if (e.key === "q") leaveLoadView();
+    else if (e.key === "w") openWidget();
     else if (e.key === "Escape") { if (state.selected) closeDrawer(); else leaveLoadView(); }
     else if ("12345".includes(e.key)) { const b = $$("#tabs button[data-tab]")[Number(e.key) - 1]; if (b) b.click(); }
   });

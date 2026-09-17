@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="omniqueue-token" content="__OMNIQUEUE_TOKEN__">
+<title>OmniQueue widget</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<script src="/theme.js"></script>
+</head>
+<body class="widget">
+<header class="w-top">
+  <a href="/" target="omniqueue" title="open the full dashboard"><img class="w-logo" src="/logo.svg" alt="OmniQueue" width="28" height="28"></a>
+  <span id="w-summary" class="w-summary">connecting…</span>
+  <span class="w-actions">
+    <button id="w-refresh" title="poll the clusters now">↻</button>
+    <button id="w-notify" title="browser notifications for crashed / timed-out jobs">🔔</button>
+  </span>
+</header>
+
+<section id="w-clusters" class="w-clusters" aria-label="Clusters"></section>
+
+<section class="w-block" id="w-alerts-block">
+  <h2>Alerts <span id="w-alerts-count" class="w-count"></span><button id="w-clear" class="w-link" title="dismiss all alerts">clear</button></h2>
+  <ul id="w-alerts" class="w-list"></ul>
+</section>
+
+<section class="w-block">
+  <h2>Recently started <span id="w-started-count" class="w-count"></span></h2>
+  <ul id="w-started" class="w-list"></ul>
+</section>
+
+<section class="w-block">
+  <h2>Recently finished <span id="w-finished-count" class="w-count"></span></h2>
+  <ul id="w-finished" class="w-list"></ul>
+</section>
+
+<footer class="w-foot"><span id="w-status"></span></footer>
+<script src="/widget.js"></script>
+</body>
+</html>
