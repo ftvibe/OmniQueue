@@ -134,7 +134,7 @@ for x, y in body_px:  # highlight rim on the upper-left of the mantle
 
 # ---- eyes: light domes with a dark horizontal slit ----------------------------------------------
 EYE_PATTERN = [" hhh ", "hhhhh", "h@@@h", " sss "]
-for ex in (20, 31):
+for ex in (22, 29):
     for dy, row in enumerate(EYE_PATTERN):
         for dx, ch in enumerate(row):
             if ch != " ":
