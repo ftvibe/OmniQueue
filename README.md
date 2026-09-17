@@ -135,8 +135,23 @@ network change that dropped the connection.
 | `omniqueue list [--state running] ...` | poll once and print a table to the terminal |
 | `omniqueue check` | connect to every cluster once and report problems |
 | `omniqueue init [--force]` | write the example config |
+| `omniqueue completion bash\|zsh\|fish` | print a tab-completion script |
 | `omniqueue --demo ...` | run any command against fabricated clusters |
 | `omniqueue --config PATH ...` | use another config file |
+
+## Tab completion
+
+```sh
+# bash: add to ~/.bashrc
+eval "$(omniqueue completion bash)"
+# zsh: add to ~/.zshrc, after `autoload -Uz compinit && compinit`
+eval "$(omniqueue completion zsh)"
+# fish
+omniqueue completion fish > ~/.config/fish/completions/omniqueue.fish
+```
+
+Completes the subcommands and their flags; `login` and `logout` complete the
+cluster names from your config, `list --state` the job states.
 
 ## The dashboard
 

@@ -132,6 +132,24 @@ def cmd_login(args) -> int:
     return rc
 
 
+def cmd_completion(args) -> int:
+    from .completion import script
+
+    sys.stdout.write(script(args.shell))
+    return 0
+
+
+def cmd_clusters(args) -> int:
+    """Hidden helper for shell completion: print configured cluster names."""
+    try:
+        cfg = _load(args)
+    except ConfigError:
+        return 0
+    for c in cfg.clusters:
+        print(c.name)
+    return 0
+
+
 def cmd_list(args) -> int:
     """One-shot text listing, handy over a plain terminal."""
     cfg = _load(args)
@@ -191,7 +209,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--demo", action="store_true", help="use fabricated clusters and jobs instead of ssh")
     p.add_argument("-v", "--verbose", action="store_true", help="debug logging")
     p.add_argument("--version", action="version", version=f"omniqueue {__version__}")
-    sub = p.add_subparsers(dest="command", required=True)
+    sub = p.add_subparsers(dest="command", required=True,
+                           metavar="{init,monitor,serve,login,logout,list,check,completion}")
 
     s = sub.add_parser("init", help="write an example config file")
     s.add_argument("--force", action="store_true", help="overwrite an existing config")
@@ -227,6 +246,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("check", help="test the connection to every configured cluster")
     s.set_defaults(func=cmd_check)
+
+    s = sub.add_parser("completion", help="print a tab-completion script for bash, zsh or fish")
+    s.add_argument("shell", choices=["bash", "zsh", "fish"])
+    s.set_defaults(func=cmd_completion)
+
+    s = sub.add_parser("_clusters")  # no help text: hidden, used by the completion scripts
+    s.set_defaults(func=cmd_clusters)
     return p
 
 
