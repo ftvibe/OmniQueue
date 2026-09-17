@@ -16,6 +16,7 @@
     windowHours: prefs.windowHours ?? 72,
     selected: null,
     error: null,
+    matches: new Map(), // job key -> fuzzy match info for the current search
   };
 
   // ---------- helpers ----------
@@ -80,6 +81,63 @@
   };
   const stateLabel = (s) => STATE_LABEL[s] || s.toLowerCase().replace(/_/g, " ");
 
+  // ---------- fuzzy matching ----------
+  // fzf-style subsequence match: every query character must appear in order.
+  // Scores favour consecutive runs, matches at word starts, and short targets.
+  function fuzzyMatch(query, text) {
+    if (!query) return { score: 0, positions: [] };
+    if (!text) return null;
+    const q = query.toLowerCase(), t = text.toLowerCase();
+    const exact = t.indexOf(q);
+    if (exact >= 0) {
+      const positions = Array.from({ length: q.length }, (_, i) => exact + i);
+      const atStart = exact === 0 || /[^a-z0-9]/.test(t[exact - 1]);
+      return { score: 1000 + (atStart ? 200 : 0) + q.length * 20 - t.length, positions };
+    }
+    const positions = [];
+    let ti = 0, score = 0, prev = -2;
+    for (let qi = 0; qi < q.length; qi++) {
+      const idx = t.indexOf(q[qi], ti);
+      if (idx < 0) return null;
+      if (idx === prev + 1) score += 15;                      // consecutive run
+      else if (idx === 0 || /[^a-z0-9]/.test(t[idx - 1])) score += 10; // word start
+      else score += 1;
+      score -= (idx - ti) * 0.5;                              // penalise gaps
+      positions.push(idx);
+      prev = idx;
+      ti = idx + 1;
+    }
+    return { score: score * 2 - t.length * 0.1, positions };
+  }
+
+  // Match one search term against a job: fuzzy on name and job id, plain substring elsewhere.
+  function matchTerm(term, j) {
+    const name = fuzzyMatch(term, j.name), id = fuzzyMatch(term, j.job_id);
+    const other = `${j.cluster} ${j.state} ${j.node_list} ${j.reason} ${j.partition} ${j.account} ${j.work_dir} ${j.exit_summary} ${stateLabel(j.state)}`
+      .toLowerCase().includes(term.toLowerCase());
+    if (!name && !id && !other) return null;
+    return {
+      score: Math.max(name ? name.score : -Infinity, id ? id.score : -Infinity, other ? 50 : -Infinity),
+      namePos: name ? name.positions : [],
+      idPos: id ? id.positions : [],
+    };
+  }
+
+  function highlight(text, positions) {
+    if (!positions || !positions.length) return text;
+    const set = new Set(positions);
+    const frag = document.createDocumentFragment();
+    let run = "", inMark = false;
+    const flush = () => { if (run) frag.append(inMark ? el("mark", {}, run) : run); run = ""; };
+    for (let i = 0; i < text.length; i++) {
+      const m = set.has(i);
+      if (m !== inMark) { flush(); inMark = m; }
+      run += text[i];
+    }
+    flush();
+    return frag;
+  }
+
   // ---------- data ----------
   async function fetchState() {
     try {
@@ -119,6 +177,7 @@
     const snap = state.snapshot;
     if (!snap) return [];
     const q = state.search.trim().toLowerCase();
+    state.matches = new Map();
     const cutoff = state.windowHours ? Date.now() - state.windowHours * 3600e3 : 0;
     return snap.jobs.filter((j) => {
       if (state.hiddenClusters.has(j.cluster)) return false;
@@ -128,8 +187,13 @@
         if (end && end.getTime() < cutoff) return false;
       }
       if (q) {
-        const hay = `${j.cluster} ${j.job_id} ${j.name} ${j.state} ${j.node_list} ${j.reason} ${j.partition} ${j.account} ${j.work_dir} ${j.exit_summary}`.toLowerCase();
-        if (!q.split(/\s+/).every((w) => hay.includes(w))) return false;
+        let score = 0; const namePos = [], idPos = [];
+        for (const term of q.split(/\s+/)) {
+          const m = matchTerm(term, j);
+          if (!m) return false;
+          score += m.score; namePos.push(...m.namePos); idPos.push(...m.idPos);
+        }
+        state.matches.set(j.key, { score, namePos, idPos });
       }
       return true;
     });
@@ -145,7 +209,12 @@
       if (typeof v === "number") return v;
       return v === null || v === undefined ? "" : String(v).toLowerCase();
     };
+    const searching = state.search.trim() !== "";
     return jobs.sort((a, b) => {
+      if (searching) {
+        const sa = state.matches.get(a.key)?.score ?? 0, sb = state.matches.get(b.key)?.score ?? 0;
+        if (sa !== sb) return sb - sa;
+      }
       const va = val(a), vb = val(b);
       if (va < vb) return -1 * dir;
       if (va > vb) return 1 * dir;
@@ -242,8 +311,8 @@
       const note = j.category === "pending" ? j.reason : (j.exit_summary || (j.category === "unknown" ? j.reason : ""));
       const tr = el("tr", { class: state.selected === j.key ? "selected" : "", "data-key": j.key, onclick: () => openDrawer(j.key) },
         el("td", {}, el("span", { class: "cl", style: `--card-color:${clusterColor(j.cluster)}` }, j.cluster)),
-        el("td", { class: "mono" }, j.job_id),
-        el("td", { class: "name", title: j.name }, j.name),
+        el("td", { class: "mono" }, highlight(j.job_id, state.matches.get(j.key)?.idPos)),
+        el("td", { class: "name", title: j.name }, highlight(j.name, state.matches.get(j.key)?.namePos)),
         el("td", {}, el("span", { class: `state ${j.category}` }, stateLabel(j.state))),
         el("td", { class: "num mono" }, elapsedCell(j)),
         el("td", { class: "num mono" }, fmtDuration(j.time_limit_s)),

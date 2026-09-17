@@ -91,8 +91,11 @@ and log in once by hand.
 * **Cluster cards** show running / pending / failed / done counts, when the
   cluster was last reached, and the ssh or Slurm error if it was not. Click a
   card to hide or show that cluster's jobs.
-* **Tabs** filter by category; the search box matches name, id, node list,
-  reason, partition, account and work directory.
+* **Tabs** filter by category. The search box is fuzzy, fzf-style: `vsp13`
+  finds `vasp-relax-13`, `6195` finds job `619506`. Matched characters are
+  highlighted and results are ranked by match quality while you type.
+  Several space-separated terms must all match; node list, reason, partition,
+  account and work directory are searched too (plain substring).
 * **Running jobs** show a live elapsed counter and a bar of the time limit used.
   The bar turns red past 90 %.
 * **Failed jobs** carry a note such as `exit code 1`, `hit time limit`,

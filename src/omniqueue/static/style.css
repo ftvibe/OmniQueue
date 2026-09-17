@@ -98,6 +98,7 @@ td.note.problem { color: var(--problem); }
 .bar i { position: absolute; inset: 0 auto 0 0; background: var(--running); opacity: .35; }
 .bar.hot i { background: var(--problem); }
 .bar span { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font: 11px var(--mono); }
+mark { background: none; color: var(--accent); font-weight: 700; text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 2px; }
 .empty { text-align: center; color: var(--muted); padding: 40px 0; }
 
 .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(520px, 100vw); background: var(--surface); border-left: 1px solid var(--border);
