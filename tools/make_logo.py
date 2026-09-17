@@ -1,60 +1,92 @@
 """Generate the OmniQueue 8-bit octopus logo as SVG.
 
 Run: python tools/make_logo.py
-Writes src/omniqueue/static/logo.svg and favicon.svg. Edit SPRITE and re-run.
-
-Legend: '#' outline  'b' body  's' shade  'h' highlight  'o' eye  '@' pupil
-        'c' cheek    'd' data packet  'D' packet centre  '.' streaming bit
+Writes src/omniqueue/static/logo.svg and favicon.svg. Body pixels are placed
+below; the dark outline and the shading are derived automatically.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-SPRITE = [
-    "       ##########       ",
-    "     ##bbbbbbbbbb##     ",
-    "    #bbhhbbbbbbbbbb#    ",
-    "   #bbhbbbbbbbbbbbbb#   ",
-    "   #bbhbbbbbbbbbbbbb#   ",
-    "  #bbbbbbbbbbbbbbbbbb#  ",
-    "  #bb#####bbbb#####bb#  ",
-    "  #bb#ooo#bbbb#ooo#bb#  ",
-    "  #bb#o@o#bbbb#o@o#bb#  ",
-    "  #bb#o@o#bbbb#o@o#bb#  ",
-    "  #bb#####bbbb#####bb#  ",
-    "  #bccbbbbbbbbbbbbccb#  ",
-    "   #bbbbbbbbbbbbbbbb#   ",
-    "   #bbb#bbb##bbb#bbb#   ",
-    "  #bbb##bbb##bbb##bbb#  ",
-    " #bbb# #bbb##bbb# #bbb# ",
-    "#bbb#  #bbb##bbb#  #bbb#",
-    "#bb#   #bb####bb#   #bb#",
-    "#ss#   #bb#  #bb#   #ss#",
-    "dd##   #bb#  #bb#   ##dd",
-    "Dd     #bb#  #bb#     dD",
-    "  .    #sb#  #bs#    .  ",
-    "        dd    dd        ",
-    "        Dd .. dD        ",
-]
-
+W = H = 32
 COLORS = {
-    "#": "#0d3b38",  # outline, deep peacock
-    "b": "#4f8f8a",  # body teal
+    "#": "#0d3b38",  # outline
+    "b": "#4f8f8a",  # body
     "s": "#3b7672",  # shade
-    "h": "#a9cbc8",  # highlight, arctic
-    "o": "#fbefdc",  # eye white, lace
+    "h": "#a9cbc8",  # highlight
+    "o": "#fbefdc",  # eye
     "@": "#0d3b38",  # pupil
-    "c": "#e2856c",  # cheek, coral
-    "d": "#b39a4b",  # data packet, mustard
-    "D": "#fbefdc",  # packet centre
-    ".": "#c8b47c",  # streaming bit, sage
+    "d": "#b39a4b",  # data block
+    ".": "#c8b47c",  # streaming bit
 }
+g: dict[tuple[int, int], str] = {}
 
-H = len(SPRITE)
-W = len(SPRITE[0])
-assert all(len(r) == W for r in SPRITE), [i for i, r in enumerate(SPRITE) if len(r) != W]
-assert W == H == 24
+
+def put(x: int, y: int, c: str = "b", w: int = 1) -> None:
+    for i in range(w):
+        if 0 <= x + i < W and 0 <= y < H:
+            g[(x + i, y)] = c
+
+
+def both(x: int, y: int, c: str = "b", w: int = 1) -> None:
+    """Draw on the left side and mirrored on the right."""
+    put(x, y, c, w)
+    put(W - x - w, y, c, w)
+
+
+# ---- mantle: tall dome, widest at the eyes, flaring into the arm crown ----------
+MANTLE = {0: (12, 8), 1: (10, 12), 2: (9, 14), 3: (8, 16), 4: (7, 18), 5: (7, 18), 6: (6, 20), 7: (6, 20),
+          8: (5, 22), 9: (5, 22), 10: (5, 22), 11: (5, 22), 12: (5, 22), 13: (5, 22), 14: (4, 24)}
+for y, (x, w) in MANTLE.items():
+    put(x, y, "b", w)
+
+# ---- eight arms: (start row, end row, column per row) for the four left arms ------
+ARMS = [
+    # outer: fans out fast, ends short
+    {15: 4, 16: 4, 17: 3, 18: 2, 19: 1, 20: 0, 21: 0, 22: 0, 23: 0},
+    # second
+    {15: 7, 16: 7, 17: 7, 18: 6, 19: 6, 20: 5, 21: 5, 22: 4, 23: 4, 24: 4, 25: 4, 26: 4},
+    # third
+    {15: 10, 16: 10, 17: 10, 18: 10, 19: 9, 20: 9, 21: 9, 22: 8, 23: 8, 24: 8, 25: 8, 26: 8, 27: 8, 28: 8},
+    # inner: longest, hooks toward the centre at the tip
+    {15: 13, 16: 13, 17: 13, 18: 13, 19: 13, 20: 12, 21: 12, 22: 12, 23: 12, 24: 12, 25: 12, 26: 12, 27: 13, 28: 13, 29: 14},
+]
+for arm in ARMS:
+    rows = sorted(arm)
+    for y in rows:
+        w = 1 if y >= rows[-1] - 1 else 2  # taper the last two rows
+        both(arm[y], y, "b", w)
+
+# ---- shading: body with nothing solid underneath -----------------------------------
+for (x, y), c in list(g.items()):
+    if c == "b" and g.get((x, y + 1)) is None:
+        g[(x, y)] = "s"
+# ---- outline -----------------------------------------------------------------------
+for (x, y), c in list(g.items()):
+    if c in ("b", "s"):
+        for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+            if (nx, ny) not in g and 0 <= nx < W and 0 <= ny < H:
+                g[(nx, ny)] = "#"
+
+# ---- eyes: narrow boxed slits low on the mantle, pupils toward the centre -----------
+for y in (9, 12):
+    both(7, y, "#", 4)
+for y in (10, 11):
+    both(7, y, "#")
+    both(8, y, "o")
+    both(9, y, "@")
+    both(10, y, "#")
+# small highlight top-left only
+for x, y in ((11, 1), (10, 2), (9, 3), (9, 4)):
+    put(x, y, "h")
+
+# ---- data blocks being hauled in, plus bits streaming up the arms -------------------
+for x, y in ((0, 25), (5, 28), (9, 30)):
+    both(x, y, "d", 2)
+    both(x, y + 1, "d", 2)
+for x, y in ((2, 24), (3, 23), (7, 27), (7, 26), (11, 29), (11, 28)):
+    both(x, y, ".")
 
 
 def svg(background: str | None = None, pad: int = 0) -> str:
@@ -66,17 +98,17 @@ def svg(background: str | None = None, pad: int = 0) -> str:
     ]
     if background:
         out.append(f'<rect width="{size}" height="{size}" rx="{size / 6:.1f}" fill="{background}"/>')
-    for y, row in enumerate(SPRITE):
+    for y in range(H):
         x = 0
-        while x < W:  # merge runs of one colour into a single rect
-            ch = row[x]
-            if ch == " ":
+        while x < W:
+            c = g.get((x, y))
+            if c is None:
                 x += 1
                 continue
             run = 1
-            while x + run < W and row[x + run] == ch:
+            while g.get((x + run, y)) == c:
                 run += 1
-            out.append(f'<rect x="{x + pad}" y="{y + pad}" width="{run}" height="1" fill="{COLORS[ch]}"/>')
+            out.append(f'<rect x="{x + pad}" y="{y + pad}" width="{run}" height="1" fill="{COLORS[c]}"/>')
             x += run
     out.append("</svg>")
     return "\n".join(out) + "\n"
@@ -86,4 +118,5 @@ if __name__ == "__main__":
     static = Path(__file__).resolve().parent.parent / "src" / "omniqueue" / "static"
     (static / "logo.svg").write_text(svg())
     (static / "favicon.svg").write_text(svg("#073a34", pad=2))
-    print("wrote", static / "logo.svg", "and", static / "favicon.svg")
+    for y in range(H):
+        print("".join(g.get((x, y), " ") for x in range(W)))
