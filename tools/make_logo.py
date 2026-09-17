@@ -99,19 +99,19 @@ for y in range(24, 40):
 # ---- arms: control points to the curl, then the curl itself around the ball -------------------
 # (controls..., curl centre, turns, clockwise)
 ARMS = [
-    # (controls..., curl centre, turns, clockwise, gap between arm tip and ball)
-    ([(23, 34), (15, 29), (9, 21), (8, 14)], (9, 8), 1.1, True, 1.0),        # up-left: full curl
-    ([(33, 33), (40, 27), (46, 19), (48, 12)], (46, 5), 0.65, False, 1.4),   # up-right: loose, open hook
-    ([(21, 37), (12, 38), (5, 34), (3, 28)], (5, 23), 1.3, True, 0.8),       # left: tight, more than a turn
-    ([(35, 37), (44, 38), (51, 34), (53, 28)], (50, 21), 0.55, False, 1.6),  # right: wide shallow hook
-    ([(22, 39), (15, 44), (9, 49), (4, 51)], (5, 46), 1.0, False, 1.0),      # down-left outer
-    ([(34, 39), (41, 44), (48, 48), (53, 53)], (49, 50), 0.8, True, 1.2),    # down-right outer: small curl
-    ([(26, 40), (24, 46), (19, 51), (13, 53)], (16, 49), 0.9, True, 1.1),    # down-left inner
-    ([(30, 40), (32, 47), (30, 53), (25, 55)], (30, 51), 1.15, False, 1.0),  # down-right inner: curls under
+    # (controls..., ball centre, turns, clockwise, gap). turns = 0 -> no curl, the ball sits at the tip
+    ([(23, 34), (15, 29), (9, 21), (8, 14)], (9, 8), 1.0, True, 1.0),        # up-left: curls round the ball
+    ([(33, 33), (40, 27), (45, 19), (47, 12)], (49, 8), 0, False, 0),        # up-right: straight reach
+    ([(21, 37), (12, 38), (5, 34), (3, 28)], (5, 23), 0.45, True, 1.2),      # left: gentle hook
+    ([(35, 37), (43, 38), (49, 34), (52, 29)], (53, 25), 0, False, 0),       # right: straight, slightly raised
+    ([(22, 39), (15, 44), (9, 49), (4, 51)], (5, 46), 0.9, False, 1.0),      # down-left outer: curls
+    ([(34, 39), (41, 44), (47, 48), (51, 51)], (54, 53), 0, True, 0),        # down-right outer: trails straight
+    ([(26, 40), (24, 46), (19, 51), (13, 53)], (16, 49), 0.35, True, 1.3),   # down-left inner: slight bend
+    ([(30, 40), (32, 46), (32, 51), (31, 54)], (30, 57), 0, False, 0),       # down-right inner: hangs down
 ]
 for controls, centre, turns, cw, gap in ARMS:
     body = catmull_rom(controls)
-    curl = spiral(controls[-1], centre, turns, cw, BALL_R + gap)
+    curl = spiral(controls[-1], centre, turns, cw, BALL_R + gap) if turns else []
     draw_arm(body + curl, 3.1, 1.0)
 
 # ---- shading ------------------------------------------------------------------------------------
@@ -141,7 +141,13 @@ for ex in (20, 31):
                 put(ex + dx, 30 + dy, {"h": HI, "@": EYE, "s": SHADE}[ch])
 
 # ---- balls inside the curls --------------------------------------------------------------------
-for i, (_, (cx, cy), _, _, _) in enumerate(ARMS):
+for i, (controls, (cx, cy), turns, _, _) in enumerate(ARMS):
+    if not turns:  # straight arm: ball touches the tip
+        (x0, y0), (x1, y1) = controls[-2], controls[-1]
+        d = math.dist(controls[-2], controls[-1]) or 1
+        cx, cy = x1 + (x1 - x0) / d * (BALL_R + 0.6), y1 + (y1 - y0) / d * (BALL_R + 0.6)
+        cx = min(max(cx, BALL_R - OFF_X + 0.5), W - OFF_X - BALL_R - 0.5)
+        cy = min(max(cy, BALL_R - OFF_Y + 0.5), H - OFF_Y - BALL_R - 0.5)
     disc(cx, cy, BALL_R, BALLS[i])
     put(round(cx - 1.6), round(cy - 1.6), BALL_HI if BALLS[i] != BALL_HI else "#c8b47c")
 

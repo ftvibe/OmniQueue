@@ -58,6 +58,10 @@ class SshArgvTests(unittest.TestCase):
             self.assertIn("2222", argv)
             interactive = build_ssh_argv(cfg.clusters[0], "true", 7, cfg, batch=False)
             self.assertNotIn("BatchMode=yes", interactive)
+            self.assertNotIn("-l", argv)  # no user configured
+            with_user = build_ssh_argv(ClusterConfig(name="d", host="d.example", user="flotr"), "squeue", 7, cfg)
+            self.assertIn("flotr", with_user)
+            self.assertEqual(with_user[with_user.index("-l") + 1], "flotr")
 
 
 class LocalClusterEndToEnd(unittest.TestCase):

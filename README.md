@@ -56,7 +56,7 @@ listen_port     = 8765
 [[clusters]]
 name = "tetralith"
 host = "tetralith"          # anything ssh accepts, aliases from ~/.ssh/config included
-# user = "x_flotr"          # Slurm user; defaults to $USER on the cluster
+# user = "x_flotr"          # your account there: ssh login and Slurm user; default: your local username
 # ssh_options = ["-J", "bastion", "-i", "~/.ssh/id_omniqueue"]   # allow-listed flags only, see Security notes
 # squeue_args = ["--partition=main"]
 # sacct_args  = ["--account=naiss2024-1-23"]

@@ -28,7 +28,7 @@ def default_data_dir() -> Path:
 class ClusterConfig:
     name: str
     host: str | None = None  # ssh destination (alias from ~/.ssh/config works); None/"local" runs locally
-    user: str | None = None  # Slurm user to query; default is $USER on the remote side
+    user: str | None = None  # your account on that cluster: used for the ssh login and for squeue/sacct
     ssh_options: list[str] = field(default_factory=list)
     squeue_args: list[str] = field(default_factory=list)
     sacct_args: list[str] = field(default_factory=list)
@@ -111,7 +111,7 @@ listen_port     = 8765
 [[clusters]]
 name = "tetralith"
 host = "tetralith"               # ssh alias
-# user = "x_flotr"               # Slurm user, defaults to $USER on the cluster
+# user = "x_flotr"               # your account there (ssh login + Slurm user); default: same as your local user
 # ssh_options = ["-J", "bastion", "-p", "2222", "-i", "~/.ssh/id_omniqueue"]   # allow-listed options only
 # squeue_args = ["--partition=main"]
 # sacct_args  = ["--account=naiss2024-1-23"]

@@ -80,6 +80,10 @@ def control_options(config: Config) -> list[str]:
     ]
 
 
+def _user_args(cluster: ClusterConfig) -> list[str]:
+    return ["-l", cluster.user] if cluster.user else []
+
+
 def build_ssh_argv(
     cluster: ClusterConfig,
     remote_command: str,
@@ -101,6 +105,8 @@ def build_ssh_argv(
         argv += ["-o", "BatchMode=yes", "-T"]  # never hang on a password prompt
     if config is not None:
         argv += control_options(config)
+    if cluster.user:
+        argv += ["-l", cluster.user]  # the account on that cluster: ssh login and Slurm user alike
     argv += cluster.ssh_options
     argv += ["--", cluster.host or ""]
     if remote_command:
@@ -124,7 +130,7 @@ def connection_alive(cluster: ClusterConfig, config: Config) -> bool:
     """True when a master connection for this cluster is currently open."""
     if cluster.is_local or not config.persist_connections:
         return False
-    argv = ["ssh", "-O", "check"] + control_options(config) + cluster.ssh_options + ["--", cluster.host or ""]
+    argv = ["ssh", "-O", "check"] + control_options(config) + _user_args(cluster) + cluster.ssh_options + ["--", cluster.host or ""]
     try:
         return subprocess.run(argv, capture_output=True, timeout=10).returncode == 0
     except (OSError, subprocess.TimeoutExpired):
@@ -134,7 +140,7 @@ def connection_alive(cluster: ClusterConfig, config: Config) -> bool:
 def close_connection(cluster: ClusterConfig, config: Config) -> None:
     if cluster.is_local or not config.persist_connections:
         return
-    argv = ["ssh", "-O", "exit"] + control_options(config) + cluster.ssh_options + ["--", cluster.host or ""]
+    argv = ["ssh", "-O", "exit"] + control_options(config) + _user_args(cluster) + cluster.ssh_options + ["--", cluster.host or ""]
     try:
         subprocess.run(argv, capture_output=True, timeout=10)
     except (OSError, subprocess.TimeoutExpired):
