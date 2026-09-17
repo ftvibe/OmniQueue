@@ -273,7 +273,7 @@
       const hidden = state.hiddenClusters.has(c.name);
       const counts = c.counts || {};
       const card = el("div", {
-        class: `card ${hidden ? "off" : ""} ${c.ok ? "" : "err"}`,
+        class: `card ${hidden ? "off" : ""} ${c.ok || c.error_kind === "held" ? "" : "err"}`,
         style: `--card-color:${clusterColor(c.name)}`,
         title: hidden ? "click to show this cluster's jobs" : "click to hide this cluster's jobs",
         onclick: () => { hidden ? state.hiddenClusters.delete(c.name) : state.hiddenClusters.add(c.name); savePrefs(); render(); },
@@ -283,7 +283,7 @@
           ? el("div", { class: "card-counts" },
               ...[["running", "running"], ["pending", "pending"], ["problem", "failed"], ["ok", "done"]].map(([k, label]) =>
                 el("span", { class: `pill ${k}`, title: label }, el("b", {}, counts[k] || 0), label)))
-          : el("div", { class: `card-error ${c.error_kind || ""}` }, el("span", { class: "warn-icon" }, "⚠"),
+          : el("div", { class: `card-error ${c.error_kind || ""}` }, el("span", { class: "warn-icon" }, c.error_kind === "held" ? "⏸" : "⚠"),
               el("span", {}, el("span", {}, c.error || "not reached yet"), el("small", { class: "hint" }, errorHint(c)))),
         el("div", { class: "card-foot" },
           el("span", {}, c.ok ? `polled ${clock(c.last_success)}` : c.last_success ? `last ok ${clock(c.last_success)}` : "never reached"),
@@ -308,6 +308,7 @@
     const snap = state.snapshot;
     const retry = snap?.next_refresh ? ` · retry at ${clock(snap.next_refresh)}` : "";
     switch (c.error_kind) {
+      case "held": return `not polled until you run  omniqueue login ${c.name}`;
       case "auth": return `login needed: run  omniqueue login ${c.name}${retry}`;
       case "network": return `network problem, are you online?${retry}`;
       case "timeout": return `no answer, connection dropped${retry}`;

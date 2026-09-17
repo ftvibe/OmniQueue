@@ -86,9 +86,13 @@ a one-time code, open the master by hand first:
 ```sh
 omniqueue login            # all clusters that are not connected yet
 omniqueue login dardel     # just one
-omniqueue logout           # close all connections now
-omniqueue logout dardel    # close one
+omniqueue logout           # close all connections and pause polling
+omniqueue logout dardel    # just one
 ```
+
+`logout` sticks: the poller leaves a logged-out cluster alone (its card says
+"logged out") until you run `omniqueue login` for it again, even across
+restarts of `monitor`. It never reconnects behind your back.
 
 You type the password/OTP once; the poller reuses that connection afterwards.
 Ctrl-C during `login` cancels the attempt cleanly. `logout` first asks the
@@ -130,7 +134,7 @@ network change that dropped the connection.
 | `omniqueue monitor [--port N]` | poll all clusters in the background, serve the dashboard and open it |
 | `omniqueue serve [--open]` | the same without opening a browser (for a headless machine) |
 | `omniqueue login [CLUSTER...]` | open the persistent ssh connection, allowing password / 2FA |
-| `omniqueue logout [CLUSTER...]` | close the persistent ssh connection(s) now |
+| `omniqueue logout [CLUSTER...]` | close the ssh connection(s) and stop polling those clusters until `login` |
 | `omniqueue login --force CLUSTER` | reconnect a cluster whose connection is stale |
 | `omniqueue list [--state running] ...` | poll once and print a table to the terminal |
 | `omniqueue check` | connect to every cluster once and report problems |

@@ -13,7 +13,7 @@ from .config import ClusterConfig, Config
 from .history import HistoryStore
 from .models import Job
 from .slurm import combined_command, merge_jobs, parse_sacct, parse_squeue, split_combined_output
-from .ssh import RemoteError, close_connection, connection_alive, run_on_cluster
+from .ssh import RemoteError, close_connection, connection_alive, is_held, run_on_cluster
 
 log = logging.getLogger("omniqueue.collector")
 
@@ -92,6 +92,14 @@ class Collector:
     # -- one cluster -----------------------------------------------------------
     def poll_cluster(self, cluster: ClusterConfig) -> tuple[list[Job], ClusterStatus]:
         status = self._status[cluster.name]
+        if is_held(cluster, self.config):
+            # `omniqueue logout` was run: do not touch this cluster until `omniqueue login`
+            status.ok = False
+            status.error = "logged out"
+            status.error_kind = "held"
+            status.failures = 0  # no retry backoff: nothing will change until the user acts
+            self._conn_cache[cluster.name] = (time.time(), False)
+            return self.history.jobs_for(cluster.name), status
         status.last_attempt = time.time()
         t0 = time.monotonic()
         warnings: list[str] = []
@@ -208,12 +216,13 @@ class Collector:
         for j in jobs:
             j["exit_summary"] = _exit_summary(j)
         reachable = sum(1 for c in clusters if c["ok"])
+        active = [c for c in clusters if c.get("error_kind") != "held"]
         return {
             "now": time.time(),
             "last_refresh": self.last_refresh,
             "next_refresh": self.next_refresh,
             "refreshing": self.refreshing,
-            "offline": bool(clusters) and reachable == 0 and self.last_refresh is not None,
+            "offline": bool(active) and reachable == 0 and self.last_refresh is not None,
             "refresh_seconds": self.config.refresh_seconds,
             "lookback_hours": self.config.lookback_hours,
             "history_days": self.config.history_days,

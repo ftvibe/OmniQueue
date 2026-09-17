@@ -62,6 +62,27 @@ def socket_path(cluster: ClusterConfig, config: Config) -> Path:
     return control_socket_dir(config) / f"cm-{safe}"
 
 
+def hold_path(cluster: ClusterConfig, config: Config) -> Path:
+    """Marker left by `omniqueue logout`: the poller stays off this cluster until `login`."""
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", cluster.name)
+    return control_socket_dir(config) / f"hold-{safe}"
+
+
+def is_held(cluster: ClusterConfig, config: Config) -> bool:
+    return hold_path(cluster, config).exists()
+
+
+def set_hold(cluster: ClusterConfig, config: Config) -> None:
+    hold_path(cluster, config).write_text(f"logged out at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+
+
+def clear_hold(cluster: ClusterConfig, config: Config) -> None:
+    try:
+        hold_path(cluster, config).unlink()
+    except FileNotFoundError:
+        pass
+
+
 def control_options(config: Config, cluster: ClusterConfig | None = None) -> list[str]:
     """ssh options that reuse one master connection per cluster between polls.
 
@@ -127,6 +148,7 @@ def login(cluster: ClusterConfig, config: Config) -> int:
     Runs ``ssh host true`` attached to the terminal with the same ControlPath
     the poller uses, so the resulting master is what later polls reuse.
     """
+    clear_hold(cluster, config)
     if cluster.is_local:
         return 0
     if config.persist_connections and socket_path(cluster, config).exists() and not connection_alive(cluster, config):

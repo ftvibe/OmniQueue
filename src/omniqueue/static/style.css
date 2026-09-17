@@ -93,6 +93,7 @@ kbd { font: 11px var(--mono); background: var(--surface-2); border: 1px solid va
 .card-error .warn-icon { flex: none; font-size: 14px; line-height: 1.2; }
 .card-error .hint { display: block; margin-top: 4px; color: var(--ink-2); font-weight: 500; }
 .card-error.auth { color: var(--pending); background: var(--pending-bg); }
+.card-error.held { color: var(--ink-2); background: var(--surface-2); }
 .sub.offline { color: var(--problem); font-weight: 600; }
 .card-warn { margin-top: 6px; font-size: 12px; color: var(--pending); word-break: break-word; }
 
