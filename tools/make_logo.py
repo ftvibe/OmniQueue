@@ -13,7 +13,8 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-W = H = 56
+W = H = 60
+OFF_X, OFF_Y = 2, 1  # centre the 56-unit drawing on the 60-unit canvas
 HI, BODY, SHADE, DARK, EYE = "#7fb5b0", "#4f8f8a", "#3b7672", "#26564f", "#0d3b38"
 BALLS = ["#e2856c", "#b39a4b", "#a9cbc8", "#c8b47c", "#f3c6b6", "#8fa35a", "#b07a8a", "#fbefdc"]
 BALL_HI = "#fbefdc"
@@ -23,6 +24,7 @@ g: dict[tuple[int, int], str] = {}
 
 
 def put(x: int, y: int, c: str) -> None:
+    x, y = x + OFF_X, y + OFF_Y
     if 0 <= x < W and 0 <= y < H:
         g[(x, y)] = c
 
@@ -35,6 +37,7 @@ def disc(cx: float, cy: float, r: float, c: str) -> None:
 
 
 def empty(x: int, y: int) -> bool:
+    """Canvas-coordinate lookup (used by the shading pass)."""
     return g.get((x, y)) is None
 
 
@@ -96,18 +99,19 @@ for y in range(24, 40):
 # ---- arms: control points to the curl, then the curl itself around the ball -------------------
 # (controls..., curl centre, turns, clockwise)
 ARMS = [
-    ([(23, 34), (15, 29), (9, 21), (8, 14)], (9, 8), 0.85, True),        # up-left
-    ([(33, 33), (40, 27), (46, 19), (48, 12)], (46, 6), 0.85, False),    # up-right, reaches higher
-    ([(21, 37), (12, 38), (5, 34), (3, 27)], (6, 22), 0.9, True),        # left
-    ([(35, 37), (44, 38), (51, 34), (53, 27)], (50, 22), 0.9, False),    # right
-    ([(22, 39), (15, 44), (9, 49), (4, 51)], (6, 47), 0.8, False),       # down-left outer
-    ([(34, 39), (41, 44), (48, 48), (52, 52)], (49, 50), 0.8, True),     # down-right outer, longer
-    ([(26, 40), (24, 46), (19, 51), (14, 53)], (16, 50), 0.8, True),     # down-left inner
-    ([(30, 40), (32, 47), (30, 53), (26, 54)], (28, 51), 0.8, False),    # down-right inner, curls under
+    # (controls..., curl centre, turns, clockwise, gap between arm tip and ball)
+    ([(23, 34), (15, 29), (9, 21), (8, 14)], (9, 8), 1.1, True, 1.0),        # up-left: full curl
+    ([(33, 33), (40, 27), (46, 19), (48, 12)], (46, 5), 0.65, False, 1.4),   # up-right: loose, open hook
+    ([(21, 37), (12, 38), (5, 34), (3, 28)], (5, 23), 1.3, True, 0.8),       # left: tight, more than a turn
+    ([(35, 37), (44, 38), (51, 34), (53, 28)], (50, 21), 0.55, False, 1.6),  # right: wide shallow hook
+    ([(22, 39), (15, 44), (9, 49), (4, 51)], (5, 46), 1.0, False, 1.0),      # down-left outer
+    ([(34, 39), (41, 44), (48, 48), (53, 53)], (49, 50), 0.8, True, 1.2),    # down-right outer: small curl
+    ([(26, 40), (24, 46), (19, 51), (13, 53)], (16, 49), 0.9, True, 1.1),    # down-left inner
+    ([(30, 40), (32, 47), (30, 53), (25, 55)], (30, 51), 1.15, False, 1.0),  # down-right inner: curls under
 ]
-for controls, centre, turns, cw in ARMS:
+for controls, centre, turns, cw, gap in ARMS:
     body = catmull_rom(controls)
-    curl = spiral(controls[-1], centre, turns, cw, BALL_R + 1.0)
+    curl = spiral(controls[-1], centre, turns, cw, BALL_R + gap)
     draw_arm(body + curl, 3.1, 1.0)
 
 # ---- shading ------------------------------------------------------------------------------------
@@ -125,7 +129,7 @@ for p in dark:
 for p in shade:
     g[p] = SHADE
 for x, y in body_px:  # highlight rim on the upper-left of the mantle
-    if y <= 16 and x <= 27 and g.get((x, y)) == BODY and any(empty(x - dx, y - dy) for dx, dy in ((1, 0), (0, 1), (1, 1), (2, 0), (0, 2), (2, 1), (1, 2))):
+    if y <= 16 + OFF_Y and x <= 27 + OFF_X and g.get((x, y)) == BODY and any(empty(x - dx, y - dy) for dx, dy in ((1, 0), (0, 1), (1, 1), (2, 0), (0, 2), (2, 1), (1, 2))):
         g[(x, y)] = HI
 
 # ---- eyes: light domes with a dark horizontal slit ----------------------------------------------
@@ -137,7 +141,7 @@ for ex in (20, 31):
                 put(ex + dx, 30 + dy, {"h": HI, "@": EYE, "s": SHADE}[ch])
 
 # ---- balls inside the curls --------------------------------------------------------------------
-for i, (_, (cx, cy), _, _) in enumerate(ARMS):
+for i, (_, (cx, cy), _, _, _) in enumerate(ARMS):
     disc(cx, cy, BALL_R, BALLS[i])
     put(round(cx - 1.6), round(cy - 1.6), BALL_HI if BALLS[i] != BALL_HI else "#c8b47c")
 
