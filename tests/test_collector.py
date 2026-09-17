@@ -151,33 +151,6 @@ class ConnectionStateTests(unittest.TestCase):
             self.assertIsNone({c["name"]: c for c in col.snapshot()["clusters"]}["far"]["connected"])
 
 
-class HoldTests(unittest.TestCase):
-    def test_logout_pauses_polling_until_login(self):
-        from omniqueue import collector as collector_mod
-        from omniqueue import ssh as ssh_mod
-
-        with tempfile.TemporaryDirectory() as tmp:
-            cfg = Config(clusters=[ClusterConfig(name="far", host="far.example")], data_dir=Path(tmp))
-            c = cfg.clusters[0]
-            col = Collector(cfg, HistoryStore(Path(tmp) / "h.json"))
-            ssh_mod.set_hold(c, cfg)
-            self.assertTrue(ssh_mod.is_held(c, cfg))
-            with mock.patch.object(collector_mod, "run_on_cluster") as run:
-                col.refresh()
-                run.assert_not_called()  # held: no ssh at all
-            snap = col.snapshot()
-            st = snap["clusters"][0]
-            self.assertEqual(st["error_kind"], "held")
-            self.assertEqual(st["failures"], 0)
-            self.assertFalse(snap["offline"])  # logged out is not "offline"
-            self.assertEqual(col.next_delay(), cfg.refresh_seconds)  # no fast retry
-            # login lifts the hold (ssh itself is stubbed out)
-            with mock.patch.object(ssh_mod.subprocess, "Popen") as popen:
-                popen.return_value.wait.return_value = 0
-                self.assertEqual(ssh_mod.login(c, cfg), 0)
-            self.assertFalse(ssh_mod.is_held(c, cfg))
-
-
 class CloseConnectionTests(unittest.TestCase):
     def test_stale_socket_is_removed_and_master_killed(self):
         from omniqueue import ssh as ssh_mod

@@ -17,7 +17,7 @@ from .history import HistoryStore
 from .models import Job
 from .server import make_server
 from .slurm import describe_exit
-from .ssh import close_connection, connection_alive, is_held, login, set_hold
+from .ssh import close_connection, connection_alive, login
 
 
 def fmt_duration(seconds: int | None) -> str:
@@ -81,16 +81,11 @@ def cmd_serve(args) -> int:
     print(f"OmniQueue {__version__} watching {names}\nDashboard: {url}  (Ctrl-C to stop)")
     if args.open:
         threading.Timer(0.5, webbrowser.open, args=(url,)).start()
-    if not getattr(args, "demo", False):
-        held = [c.name for c in cfg.enabled_clusters if is_held(c, cfg)]
-        if held:
-            print(f"logged out, not polled until `omniqueue login`: {', '.join(held)}")
-        if cfg.persist_connections:
-            cold = [c.name for c in cfg.enabled_clusters
-                    if not c.is_local and c.name not in held and not connection_alive(c, cfg)]
-            if cold:
-                print(f"no open ssh connection yet for: {', '.join(cold)} (first poll opens one; "
-                      f"if a password or 2FA code is needed run `omniqueue login` first)")
+    if cfg.persist_connections and not getattr(args, "demo", False):
+        cold = [c.name for c in cfg.enabled_clusters if not c.is_local and not connection_alive(c, cfg)]
+        if cold:
+            print(f"no open ssh connection yet for: {', '.join(cold)} (first poll opens one; "
+                  f"if a password or 2FA code is needed run `omniqueue login` first)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -100,8 +95,7 @@ def cmd_serve(args) -> int:
         server.server_close()
     if cfg.persist_connections and not getattr(args, "demo", False):
         hours = cfg.persist_seconds / 3600
-        print(f"ssh connections stay open for up to {hours:g} h; `omniqueue logout` closes them and keeps "
-              f"OmniQueue off the clusters until the next `omniqueue login`")
+        print(f"ssh connections stay open for up to {hours:g} h; run `omniqueue logout` to close them now")
     return 0
 
 
@@ -123,9 +117,7 @@ def cmd_login(args) -> int:
         if c.is_local:
             continue
         if args.close:
-            result = close_connection(c, cfg)
-            set_hold(c, cfg)
-            print(f"{c.name}: {result}; polling paused until `omniqueue login {c.name}`")
+            print(f"{c.name}: {close_connection(c, cfg)}")
             continue
         if connection_alive(c, cfg) and not args.force:
             print(f"{c.name}: connection already open")
@@ -201,8 +193,6 @@ def cmd_check(args) -> int:
             n = sum(c["counts"].values())
             warn = f"  (warning: {c['warning']})" if c.get("warning") else ""
             print(f"[ok]    {c['name']:<16} {n} jobs in {c['poll_seconds']:.1f}s{warn}")
-        elif c.get("error_kind") == "held":
-            print(f"[held]  {c['name']:<16} logged out; run `omniqueue login {c['name']}` to resume")
         else:
             failed += 1
             hint = ""
@@ -245,7 +235,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--close", action="store_true", help="close the persistent connection(s) instead")
     s.set_defaults(func=cmd_login)
 
-    s = sub.add_parser("logout", help="close the ssh connection(s) and stop polling those clusters until `login`")
+    s = sub.add_parser("logout", help="close the persistent ssh connection(s)")
     s.add_argument("cluster", nargs="*", help="only these clusters (default: all)")
     s.set_defaults(func=cmd_login, close=True, force=False)
 
