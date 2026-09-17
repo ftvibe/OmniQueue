@@ -149,10 +149,17 @@
   }
 
   // ---------- data ----------
+  // The page does as little as possible: it asks the server every POLL_MS with the
+  // ETag it already has (a 304 costs nothing and triggers no work), re-renders only
+  // when a new snapshot arrives, and stops polling altogether while the tab is hidden.
+  let stateEtag = null;
+  let stateTimer = null;
   async function fetchState() {
     try {
-      const res = await fetch("/api/state", { cache: "no-store" });
+      const res = await fetch("/api/state", { cache: "no-store", headers: stateEtag ? { "If-None-Match": stateEtag } : {} });
+      if (res.status === 304) { if (state.error) { state.error = null; renderHeader(); } return; }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      stateEtag = res.headers.get("ETag");
       const snap = await res.json();
       const changed = !state.snapshot || snap.last_refresh !== state.snapshot.last_refresh
         || snap.refreshing !== state.snapshot.refreshing || state.error;
@@ -283,10 +290,13 @@
     if (state.loadTimer) clearInterval(state.loadTimer);
     state.loadTimer = null;
   }
+  let loadEtag = null;
   async function fetchLoad() {
     try {
-      const res = await fetch("/api/load", { cache: "no-store" });
+      const res = await fetch("/api/load", { cache: "no-store", headers: loadEtag ? { "If-None-Match": loadEtag } : {} });
+      if (res.status === 304) return;
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      loadEtag = res.headers.get("ETag");
       state.load = await res.json();
     } catch (err) {
       state.load = { ...(state.load || {}), fetching: false, error: err.message };
@@ -609,6 +619,21 @@
     else if ("12345".includes(e.key)) { const b = $$("#tabs button[data-tab]")[Number(e.key) - 1]; if (b) b.click(); }
   });
 
-  fetchState();
-  setInterval(fetchState, POLL_MS);
+  // ---------- polling, only while visible ----------
+  function startPolling() {
+    if (stateTimer) return;
+    fetchState();
+    stateTimer = setInterval(fetchState, POLL_MS);
+    if (state.view === "load" && state.load?.fetching) startLoadPolling();
+  }
+  function stopPolling() {
+    if (stateTimer) clearInterval(stateTimer);
+    stateTimer = null;
+    stopLoadPolling();
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") startPolling(); else stopPolling();
+  });
+  window.addEventListener("pagehide", stopPolling);
+  if (document.visibilityState === "visible") startPolling();
 })();

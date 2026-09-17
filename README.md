@@ -172,7 +172,10 @@ cluster names from your config, `list --state` the job states.
   `logo = "path-or-https-url"` in the cluster entry. Without one, the card shows
   the cluster's initials in its accent colour.
 * Nothing on the page ticks between polls: elapsed times and timestamps are
-  those of the last poll, so the layout stays still.
+  those of the last poll, so the layout stays still. The page asks the server
+  for news every few seconds with the version it already has and gets an
+  empty 304 unless a poll finished, re-renders only then, and stops asking
+  altogether while the tab or window is hidden.
 * **Tabs** filter by category. The search box matches loosely: `vsp13`
   finds `vasp-relax-13`, `6195` finds job `619506`. Matched characters are
   highlighted and results are ranked by match quality while you type.

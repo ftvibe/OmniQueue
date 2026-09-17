@@ -89,6 +89,24 @@ class ServerTests(unittest.TestCase):
         self.assertEqual({p["partition"] for p in by["dardel"]["partitions"]}, {"main", "gpu"})  # load_partitions filter
         self.assertIn("timed out", by["offline-cluster"]["error"])
 
+    def test_etag_304(self):
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/api/state") as r:
+            etag = r.headers.get("ETag")
+        self.assertTrue(etag)
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/state", headers={"If-None-Match": etag})
+        try:
+            with urllib.request.urlopen(req) as r:
+                self.fail(f"expected 304, got {r.status}")
+        except urllib.error.HTTPError as e:  # urllib reports 304 as an error
+            self.assertEqual(e.code, 304)
+            self.assertEqual(e.read(), b"")
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/state", headers={"If-None-Match": '"stale"'})
+        with urllib.request.urlopen(req) as r:
+            self.assertEqual(r.status, 200)
+            self.assertTrue(json.loads(r.read())["clusters"])
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/api/load") as r:
+            self.assertTrue(r.headers.get("ETag"))
+
     def test_404(self):
         with self.assertRaises(urllib.error.HTTPError) as cm:
             self.get("/../pyproject.toml")

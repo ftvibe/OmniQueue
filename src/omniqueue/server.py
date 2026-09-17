@@ -77,8 +77,18 @@ class Handler(BaseHTTPRequestHandler):
         header = self.headers.get("X-OmniQueue-Token", "")
         return hmac.compare_digest(header, self.csrf_token)
 
-    def _json(self, payload, status: HTTPStatus = HTTPStatus.OK) -> None:
-        self._send(status, json.dumps(payload).encode(), "application/json; charset=utf-8")
+    def _json(self, payload, status: HTTPStatus = HTTPStatus.OK, extra: dict[str, str] | None = None) -> None:
+        self._send(status, json.dumps(payload).encode(), "application/json; charset=utf-8", extra)
+
+    def _json_if_changed(self, etag: str, build) -> None:
+        """Answer 304 when the client already holds this version (If-None-Match)."""
+        if self.headers.get("If-None-Match") == etag:
+            self.send_response(HTTPStatus.NOT_MODIFIED)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            return
+        self._json(build(), extra={"ETag": etag})
 
     def do_GET(self) -> None:  # noqa: N802 - http.server API
         url = urlparse(self.path)
@@ -89,10 +99,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(HTTPStatus.UNAUTHORIZED, b"OmniQueue: access token required (open /?token=...)\n", "text/plain")
             return
         if path == "/api/state":
-            self._json(self.collector.snapshot())
+            self._json_if_changed(self.collector.state_etag(), self.collector.snapshot)
             return
         if path == "/api/load":
-            self._json(self.collector.load_snapshot())
+            self._json_if_changed(self.collector.load_etag(), self.collector.load_snapshot)
             return
         if path == "/api/health":
             self._json({"ok": True})

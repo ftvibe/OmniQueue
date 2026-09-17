@@ -231,6 +231,13 @@ class Collector:
             c["logo"] = st.logo if st else None
         return {"now": time.time(), "fetching": self.load_fetching, "fetched_at": self.load_fetched_at, "clusters": clusters}
 
+    def state_etag(self) -> str:
+        """Changes whenever a browser would see something new in /api/state."""
+        return f'"{self.last_refresh}-{self.refreshing}-{self.next_refresh}"'
+
+    def load_etag(self) -> str:
+        return f'"{self.load_fetched_at}-{self.load_fetching}"'
+
     # -- all clusters ------------------------------------------------------------
     def refresh(self) -> None:
         clusters = self.config.enabled_clusters
