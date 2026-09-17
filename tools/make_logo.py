@@ -1,9 +1,10 @@
 """Generate the OmniQueue pixel octopus logo as SVG.
 
 Run: python tools/make_logo.py
-Writes src/omniqueue/static/logo.svg and favicon.svg. The body is a circle plus
-eight tapered arms drawn as polylines; shading is derived automatically and each
-arm tip holds a ball in its own colour (one colour per data source).
+Writes src/omniqueue/static/logo.svg and favicon.svg. Tall dome head, eight
+chunky arms drawn with a square brush along polylines (blocky staircase look),
+two-tone shading derived automatically, and a ball in its own colour at every
+arm tip, one per data source.
 """
 
 from __future__ import annotations
@@ -11,9 +12,8 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-W = H = 40
-BODY, SHADE, HI = "#4f8f8a", "#2f6a66", "#7fb5b0"
-EYE, EYE_HI, MOUTH = "#0d3b38", "#fbefdc", "#2f6a66"
+W = H = 48
+BODY, SHADE, EYE = "#4f8f8a", "#2f6a66", "#0d3b38"
 BALLS = ["#e2856c", "#b39a4b", "#a9cbc8", "#c8b47c", "#f3c6b6", "#8fa35a", "#b07a8a", "#fbefdc"]
 BALL_HI = "#fbefdc"
 
@@ -25,80 +25,83 @@ def put(x: int, y: int, c: str) -> None:
         g[(x, y)] = c
 
 
-def disc(cx: float, cy: float, r: float, c: str) -> None:
-    for y in range(int(cy - r - 1), int(cy + r + 2)):
-        for x in range(int(cx - r - 1), int(cx + r + 2)):
-            if (x + 0.5 - cx) ** 2 + (y + 0.5 - cy) ** 2 <= r * r:
+def square(cx: float, cy: float, size: int, c: str) -> None:
+    x0, y0 = round(cx - size / 2), round(cy - size / 2)
+    for y in range(y0, y0 + size):
+        for x in range(x0, x0 + size):
+            put(x, y, c)
+
+
+def ellipse(cx: float, cy: float, rx: float, ry: float, c: str) -> None:
+    for y in range(H):
+        for x in range(W):
+            if ((x + 0.5 - cx) / rx) ** 2 + ((y + 0.5 - cy) / ry) ** 2 <= 1:
                 put(x, y, c)
 
 
-def arm(points: list[tuple[float, float]], r0: float, r1: float) -> None:
-    """Polyline through `points`, radius tapering from r0 at the base to r1 at the tip."""
+def arm(points: list[tuple[float, float]], s0: int, s1: int) -> None:
+    """Square brush along a polyline, brush size stepping from s0 down to s1."""
     total = sum(math.dist(a, b) for a, b in zip(points, points[1:]))
     done = 0.0
     for a, b in zip(points, points[1:]):
         seg = math.dist(a, b)
-        steps = max(1, int(seg * 3))
+        steps = max(1, int(seg * 2))
         for i in range(steps + 1):
             t = i / steps
             frac = (done + seg * t) / total
-            r = r0 + (r1 - r0) * frac
-            disc(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, r, BODY)
+            size = s0 if frac < 0.45 else (s1 if frac > 0.8 else (s0 + s1) // 2)
+            square(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, size, BODY)
         done += seg
 
 
-def mirror(pts: list[tuple[float, float]]) -> list[tuple[float, float]]:
-    return [(W - x, y) for x, y in pts]
+# ---- head: tall dome, plus the body mass the arms grow from ---------------------------
+ellipse(24, 14.5, 10.2, 11.5, BODY)
+for y in range(22, 33):
+    put_w = 14 if y < 30 else 10
+    for x in range(24 - put_w // 2, 24 + put_w // 2):
+        put(x, y, BODY)
 
-
-# ---- head and central body ---------------------------------------------------------
-disc(20, 13, 9.6, BODY)        # head
-disc(20, 21.5, 7.0, BODY)      # body / arm crown
-
-# ---- arms: base at the body, curling outward (left side; mirrored) -----------------
-LEFT_ARMS = [
-    [(14, 17), (9, 13), (5, 8), (5, 4)],             # up-left, reaches up
-    [(13, 22), (7, 22), (3, 19), (2, 15)],           # left, curls up
-    [(15, 26), (10, 30), (6, 34), (3, 36)],          # down-left outer, curls out
-    [(18, 28), (17, 33), (14, 37), (11, 38)],        # down-left inner, curls out
+# ---- arms (asymmetric like a real one) --------------------------------------------------
+ARMS = [
+    [(19, 26), (12, 21), (8, 14), (7, 8), (9, 4)],             # up-left, curls in at the top
+    [(30, 25), (36, 19), (40, 11), (41, 4)],                    # up-right, raised high
+    [(18, 30), (10, 31), (4, 28), (3, 21)],                     # left, hooks up
+    [(31, 30), (39, 32), (44, 29), (45, 22)],                   # right, hooks up
+    [(20, 32), (13, 37), (7, 42), (3, 44)],                     # down-left outer
+    [(28, 32), (35, 37), (41, 42), (45, 44)],                   # down-right outer
+    [(22, 33), (21, 39), (19, 43), (17, 45)],                   # down-left inner
+    [(26, 33), (28, 39), (30, 43), (32, 45)],                   # down-right inner
 ]
-for pts in LEFT_ARMS:
-    arm(pts, 3.0, 1.6)
-    arm(mirror(pts), 3.0, 1.6)
+for pts in ARMS:
+    arm(pts, 5, 3)
 
-# ---- shading: darker tone along the lower and right edges ---------------------------
+# ---- shading: darker tone on lower and right edges -------------------------------------
 for (x, y), c in list(g.items()):
     if c == BODY and (g.get((x, y + 1)) is None or g.get((x + 1, y)) is None):
         g[(x, y)] = SHADE
-# a lighter highlight on the upper-left of the head
-for x, y in ((15, 6), (16, 5), (17, 5), (14, 7), (13, 8), (13, 9)):
-    put(x, y, HI)
 
-# ---- face ------------------------------------------------------------------------------
-for ex in (15, 23):
+# ---- eyes: two plain squares ---------------------------------------------------------------
+for ex in (19, 27):
     for dx in range(2):
-        for dy in range(3):
-            put(ex + dx, 12 + dy, EYE)
-    put(ex, 12, EYE_HI)
-for x in range(18, 22):
-    put(x, 18, MOUTH)
-put(17, 17, MOUTH)
-put(22, 17, MOUTH)
+        for dy in range(2):
+            put(ex + dx, 16 + dy, EYE)
 
-# ---- balls in the arm tips, one colour per source ------------------------------------
+
+# ---- balls at the arm tips, one colour per source -------------------------------------------
 def ball(cx: float, cy: float, colour: str) -> None:
-    disc(cx, cy, 2.2, colour)
-    put(int(cx - 1.5), int(cy - 1.5), BALL_HI if colour != BALL_HI else "#c8b47c")
+    for y in range(H):
+        for x in range(W):
+            if (x + 0.5 - cx) ** 2 + (y + 0.5 - cy) ** 2 <= 2.6 ** 2:
+                put(x, y, colour)
+    put(round(cx - 1.6), round(cy - 1.6), BALL_HI if colour != BALL_HI else "#c8b47c")
 
 
-for i, pts in enumerate(LEFT_ARMS):
+for i, pts in enumerate(ARMS):
     (x0, y0), (x1, y1) = pts[-2], pts[-1]
     d = math.dist(pts[-2], pts[-1]) or 1
-    ext = 2.6
-    cx, cy = x1 + (x1 - x0) / d * ext, y1 + (y1 - y0) / d * ext
-    cx, cy = min(max(cx, 2.2), W / 2 - 2), min(max(cy, 2.2), H - 2.2)
+    cx, cy = x1 + (x1 - x0) / d * 3.2, y1 + (y1 - y0) / d * 3.2
+    cx, cy = min(max(cx, 2.6), W - 2.6), min(max(cy, 2.6), H - 2.6)
     ball(cx, cy, BALLS[i])
-    ball(W - cx, cy, BALLS[i + 4])
 
 
 def svg(background: str | None = None, pad: int = 0) -> str:
@@ -130,6 +133,4 @@ if __name__ == "__main__":
     static = Path(__file__).resolve().parent.parent / "src" / "omniqueue" / "static"
     (static / "logo.svg").write_text(svg())
     (static / "favicon.svg").write_text(svg("#073a34", pad=2))
-    sym = {BODY: "b", SHADE: "s", HI: "h", EYE: "@", EYE_HI: "o", MOUTH: "m"}
-    for y in range(H):
-        print("".join(sym.get(g.get((x, y)), " " if (x, y) not in g else "*") for x in range(W)))
+    print("wrote logo.svg and favicon.svg")
