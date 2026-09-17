@@ -1,6 +1,9 @@
-# OmniQueue
-
-<img src="src/omniqueue/static/logo.svg" width="96" align="right" alt="">
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="src/omniqueue/static/logo_text_dark.svg">
+    <img src="src/omniqueue/static/logo_text.svg" width="420" alt="OmniQueue">
+  </picture>
+</p>
 
 One dashboard for your Slurm jobs on several supercomputers.
 
@@ -204,8 +207,10 @@ cluster names from your config, `list --state` the job states.
   `sinfo`. Per cluster, `load_partitions = ["main", "gpu"]` limits the view
   to the partitions you care about and `show_load = false` leaves the cluster
   out.
-* Pending jobs show Slurm's estimated start time in the note when the
-  scheduler has computed one.
+* Pending jobs show Slurm's estimated start time in the Started column,
+  italic with a `~`, whenever the backfill scheduler has computed one (the
+  same value `squeue --start` prints). Jobs the scheduler has not evaluated
+  yet show none.
 * Click a row for all details (queue wait, node list, work dir, exit code, ...).
   Finished jobs can be removed from the local history from there.
 * Muted teal / coral / mustard palette, dark and light; failed and done never
@@ -285,8 +290,9 @@ zone).
 
 ## Development
 
-The logo is a 24x24 sprite drawn as ASCII in `tools/make_logo.py`; edit it and
-re-run the script to regenerate `logo.svg` and `favicon.svg`.
+The octopus sprite comes from `tools/make_logo.py` (`logo.svg`, `favicon.svg`).
+The combined logo with lettering is `logo_text.svg`; `logo_text_dark.svg` is the
+same file with the lettering recoloured for the dark theme.
 
 ```sh
 python -m unittest discover -s tests -v

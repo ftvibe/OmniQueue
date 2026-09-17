@@ -509,8 +509,8 @@
       th.classList.toggle("desc", th.dataset.sort === state.sort.key && state.sort.desc);
     }
     const rows = jobs.map((j) => {
-      let note = j.category === "pending" ? j.reason : (j.exit_summary || (j.category === "unknown" ? j.reason : ""));
-      if (j.category === "pending" && j.start_time) note = `${note ? note + " · " : ""}est. start ${fmtTime(j.start_time)}`;
+      const note = j.category === "pending" ? j.reason : (j.exit_summary || (j.category === "unknown" ? j.reason : ""));
+      const pendingEstimate = j.category === "pending" && j.start_time;
       const tr = el("tr", { class: state.selected === j.key ? "selected" : "", "data-key": j.key, onclick: () => openDrawer(j.key) },
         el("td", {}, el("span", { class: "cl", style: `--card-color:${clusterColor(j.cluster)}` }, j.cluster)),
         el("td", { class: "mono" }, highlight(j.job_id, state.matches.get(j.key)?.idPos)),
@@ -520,7 +520,9 @@
         el("td", { class: "num mono" }, fmtDuration(j.time_limit_s)),
         el("td", { class: "num" }, j.nodes || "–"),
         el("td", { class: "mono", title: j.submit_time }, fmtTime(j.submit_time)),
-        el("td", { class: "mono", title: j.start_time }, fmtTime(j.start_time)),
+        pendingEstimate
+          ? el("td", { class: "mono estimate", title: `Slurm's estimated start (backfill): ${j.start_time}` }, `~${fmtTime(j.start_time)}`)
+          : el("td", { class: "mono", title: j.start_time }, fmtTime(j.start_time)),
         el("td", { class: "mono", title: j.end_time }, fmtTime(j.end_time)),
         el("td", { class: `note ${j.category === "problem" || j.category === "unknown" ? "problem" : ""}`, title: note }, note || ""),
       );
@@ -554,7 +556,7 @@
       ["elapsed", fmtDuration(j.elapsed_s)],
       ["time limit", fmtDuration(j.time_limit_s)],
       ["submitted", j.submit_time || "–"],
-      ["started", j.start_time || "–"],
+      [j.category === "pending" ? "est. start" : "started", j.start_time || "–"],
       ["ended", j.end_time || "–"],
       ["queue wait", waitTime(j)],
       ["nodes", `${j.nodes || "–"}${j.node_list ? "  " + j.node_list : ""}`],

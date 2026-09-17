@@ -17,7 +17,7 @@ from .collector import Collector
 
 log = logging.getLogger("omniqueue.server")
 
-STATIC_FILES = {"", "index.html", "app.js", "theme.js", "style.css", "favicon.svg", "logo.svg"}
+STATIC_FILES = {"", "index.html", "app.js", "theme.js", "style.css", "favicon.svg", "logo.svg", "logo_text.svg", "logo_text_dark.svg"}
 
 
 def _static(name: str) -> bytes:

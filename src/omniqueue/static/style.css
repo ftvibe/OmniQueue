@@ -51,14 +51,22 @@ kbd { font: 11px var(--mono); background: var(--surface-2); border: 1px solid va
 .muted { color: var(--muted); }
 .mono { font-family: var(--mono); font-size: 12.5px; }
 
-.top { display: grid; grid-template-columns: 1fr auto; grid-template-areas: "brand theme" "controls controls"; gap: 12px 24px; align-items: center;
-  padding: 14px 24px; min-height: 92px; background: var(--surface); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 5; }
+.top { display: grid; grid-template-columns: 1fr auto; grid-template-areas: "brand theme" "controls controls"; gap: 10px 24px; align-items: center;
+  padding: 12px 24px; min-height: 92px; background: var(--surface); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 5; }
 .top .brand { grid-area: brand; }
 .top .controls { grid-area: controls; }
 .top .top-right { grid-area: theme; align-self: start; display: flex; gap: 8px; }
 .brand { display: flex; align-items: center; gap: 16px; }
 .brand h1 { margin: 0; font: 700 28px/1 var(--brand); letter-spacing: .5px; }
-.logo { width: 64px; height: 64px; image-rendering: pixelated; flex: none; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.brand-logo { height: 72px; width: auto; image-rendering: pixelated; flex: none; }
+.brand-logo.dark { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .brand-logo.light { display: none; }
+  :root:not([data-theme="light"]) .brand-logo.dark { display: inline; }
+}
+:root[data-theme="dark"] .brand-logo.light { display: none; }
+:root[data-theme="dark"] .brand-logo.dark { display: inline; }
 #theme { padding: 5px 8px; min-width: 38px; }
 .sub { color: var(--muted); }
 .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -162,6 +170,7 @@ table.jobs { width: 100%; border-collapse: collapse; background: var(--surface);
 .jobs th.sorted.desc::after { content: " ▼"; }
 .jobs td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .jobs tbody tr:hover { background: var(--surface-2); cursor: pointer; }
+.jobs td.estimate { color: var(--pending); font-style: italic; }
 .jobs tbody tr.selected { outline: 2px solid var(--accent); outline-offset: -2px; }
 .jobs tr:last-child td { border-bottom: none; }
 td.name { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
