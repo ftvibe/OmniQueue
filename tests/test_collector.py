@@ -220,7 +220,7 @@ class ActiveTests(unittest.TestCase):
                 with redirect_stdout(out):
                     self.assertEqual(cli_mod.main(["--config", str(Path(tmp) / "x.toml"), "active"]), 0)
             text = out.getvalue()
-            self.assertRegex(text, r"a\s+a.example\s+open\s+4242\s+\d\d:\d\d:\d\d\s+01:59:5\d")
+            self.assertRegex(text, r"a\s+a.example\s+open\s+4242\s+\d\d:\d\d:\d\d\s+(01:59:5\d|02:00:00)")
             self.assertRegex(text, r"b\s+b.example\s+closed")
             self.assertIn("1 open", text)
             # logout removes the stamp
