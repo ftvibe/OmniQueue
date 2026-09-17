@@ -72,7 +72,10 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(cm.exception.code, 404)
 
     def test_refresh(self):
-        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/refresh", method="POST")
+        page = self.get("/")[2]
+        token = page.split(b'name="omniqueue-token" content="')[1].split(b'"')[0].decode()
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/refresh", method="POST",
+                                     headers={"X-OmniQueue-Token": token})
         with urllib.request.urlopen(req) as r:
             self.assertEqual(json.loads(r.read())["ok"], True)
 

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from . import __version__
 from .collector import Collector
-from .config import Config, ConfigError, default_config_path, load_config, write_example_config
+from .config import Config, ConfigError, default_config_path, load_config, permission_warnings, write_example_config
 from .history import HistoryStore
 from .models import Job
 from .server import make_server
@@ -49,11 +49,17 @@ def _collector(cfg: Config, args) -> Collector:
     return Collector(cfg, history)
 
 
+def _perm_warnings(cfg: Config, args) -> list[str]:
+    if getattr(args, "demo", False):
+        return []
+    return permission_warnings(Path(args.config) if args.config else default_config_path(), cfg)
+
+
 # -- subcommands --------------------------------------------------------------------
 def cmd_init(args) -> int:
     path = Path(args.config) if args.config else default_config_path()
     write_example_config(path, force=args.force)
-    print(f"Wrote example config to {path}\nEdit it, then run: omniqueue serve")
+    print(f"Wrote example config to {path} (mode 600)\nEdit it, then run: omniqueue check")
     return 0
 
 
@@ -65,8 +71,12 @@ def cmd_serve(args) -> int:
         cfg.listen_host = args.host
     collector = _collector(cfg, args)
     collector.start()
-    server = make_server(collector, cfg.listen_host, cfg.listen_port)
+    server = make_server(collector, cfg.listen_host, cfg.listen_port, cfg.access_token)
     url = f"http://{cfg.listen_host}:{server.server_address[1]}/"
+    if cfg.access_token:
+        url += f"?token={cfg.access_token}"
+    for w in _perm_warnings(cfg, args):
+        print(f"warning: {w}")
     names = ", ".join(c.name for c in cfg.enabled_clusters)
     print(f"OmniQueue {__version__} watching {names}\nDashboard: {url}  (Ctrl-C to stop)")
     if args.open:
@@ -148,6 +158,8 @@ def cmd_list(args) -> int:
 def cmd_check(args) -> int:
     """Connect to every cluster once and report what works."""
     cfg = _load(args)
+    for w in _perm_warnings(cfg, args):
+        print(f"[warn]  {w}")
     collector = _collector(cfg, args)
     t0 = time.time()
     collector.refresh()
@@ -160,7 +172,10 @@ def cmd_check(args) -> int:
             print(f"[ok]    {c['name']:<16} {n} jobs in {c['poll_seconds']:.1f}s{warn}")
         else:
             failed += 1
-            print(f"[FAIL]  {c['name']:<16} {c['error']}")
+            hint = ""
+            if c.get("error_kind") == "auth":
+                hint = "  -> run `omniqueue login " + c["name"] + "` to log in / verify the host key"
+            print(f"[FAIL]  {c['name']:<16} {c['error']}{hint}")
     print(f"checked {len(snap['clusters'])} clusters in {time.time() - t0:.1f}s")
     return 1 if failed else 0
 

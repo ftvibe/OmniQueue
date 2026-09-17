@@ -10,6 +10,7 @@ import threading
 import time
 from pathlib import Path
 
+from .config import secure_dir
 from .models import Job
 
 
@@ -39,12 +40,13 @@ class HistoryStore:
 
     def save(self) -> None:
         with self._lock:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
+            secure_dir(self.path.parent)
             payload = {"version": 1, "saved_at": time.time(), "jobs": [j.to_dict() for j in self._jobs.values()]}
             fd, tmp = tempfile.mkstemp(dir=self.path.parent, prefix=".history-", suffix=".json")
             try:
                 with os.fdopen(fd, "w") as fh:
                     json.dump(payload, fh)
+                os.chmod(tmp, 0o600)
                 os.replace(tmp, self.path)
             except BaseException:
                 try:

@@ -3,6 +3,8 @@
   "use strict";
 
   const POLL_MS = 5000;
+  const TOKEN = document.querySelector('meta[name="omniqueue-token"]')?.content || "";
+  const post = (url) => fetch(url, { method: "POST", headers: { "X-OmniQueue-Token": TOKEN } });
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
@@ -160,13 +162,13 @@
     }
   }
   async function requestRefresh() {
-    try { await fetch("/api/refresh", { method: "POST" }); } catch { /* shown on next poll */ }
+    try { await post("/api/refresh"); } catch { /* shown on next poll */ }
     $("#refresh-state").textContent = "refreshing…";
     $("#refresh-state").classList.add("spin");
     setTimeout(fetchState, 800);
   }
   async function forgetJob(key) {
-    await fetch(`/api/forget/${encodeURIComponent(key)}`, { method: "POST" });
+    await post(`/api/forget/${encodeURIComponent(key)}`);
     closeDrawer();
     setTimeout(fetchState, 500);
   }

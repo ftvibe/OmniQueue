@@ -46,7 +46,8 @@ lookback_hours  = 72      # how far back sacct is asked for finished jobs
 history_days    = 30      # finished jobs stay in the local history this long
 ssh_timeout     = 20
 persist_connections = true   # keep one ssh connection per cluster open between polls
-persist_seconds = 28800      # ... for this long after the last poll (8 h)
+persist_seconds = 14400      # ... for this long after the last poll (4 h)
+accept_new_host_keys = false # polls require hosts in known_hosts; `omniqueue login` verifies new ones
 keepalive_seconds = 15       # notice a dead connection within ~45 s
 retry_seconds   = 15         # retry failed clusters after 15 s, 30 s, 60 s ... up to refresh_seconds
 listen_host     = "127.0.0.1"
@@ -56,7 +57,7 @@ listen_port     = 8765
 name = "tetralith"
 host = "tetralith"          # anything ssh accepts, aliases from ~/.ssh/config included
 # user = "x_flotr"          # Slurm user; defaults to $USER on the cluster
-# ssh_options = ["-o", "ProxyJump=bastion"]
+# ssh_options = ["-J", "bastion", "-i", "~/.ssh/id_omniqueue"]   # allow-listed flags only, see Security notes
 # squeue_args = ["--partition=main"]
 # sacct_args  = ["--account=naiss2024-1-23"]
 # use_sacct = false         # for clusters without job accounting
@@ -76,7 +77,7 @@ connection multiplexing (`ControlMaster`): the first connection to a cluster
 becomes a *master* that stays in the background, and every later poll is a
 cheap new session over that existing connection, with no TCP handshake, key
 exchange or login prompt. The master closes itself after `persist_seconds`
-(default 8 h) without use. One poll is exactly one ssh session per cluster:
+(default 4 h) without use. One poll is exactly one ssh session per cluster:
 `squeue` and `sacct` run in the same remote shell.
 
 Polls run ssh in batch mode and never prompt. If a cluster needs a password or
@@ -158,6 +159,48 @@ network change that dropped the connection.
 Only the dashboard's own machine can reach it (`listen_host = "127.0.0.1"`).
 If you run OmniQueue on a remote machine, forward the port with
 `ssh -L 8765:127.0.0.1:8765 thatmachine` rather than opening it up.
+
+## Security notes
+
+OmniQueue runs commands on your HPC accounts, so it is built to do as little
+as possible and to fail closed. Before pointing it at real clusters:
+
+* **Use a dedicated key.** Create a key just for OmniQueue
+  (`ssh-keygen -t ed25519 -f ~/.ssh/id_omniqueue`) and reference it with
+  `ssh_options = ["-i", "~/.ssh/id_omniqueue", "-o", "IdentitiesOnly=yes"]`.
+  It only ever needs to run `squeue` and `sacct`; where the centre supports
+  it, restrict the key to those commands in `authorized_keys`.
+* **Keep the dashboard local.** `listen_host = "127.0.0.1"` is the default and
+  the config loader refuses any other address unless you set
+  `allow_remote = true` *and* an `access_token` of at least 16 characters.
+  With a token, every request must carry it: open
+  `http://host:8765/?token=...` once and a cookie is set. To view the dashboard
+  from another machine, prefer `ssh -L 8765:127.0.0.1:8765 host` or Tailscale
+  over exposing the port.
+* **Files are private.** `omniqueue init` writes the config with mode 600,
+  the history file is written 600 inside a 700 data directory, and
+  `omniqueue check` warns if either has become readable by others. The history
+  holds job names, node lists and working directories.
+* **`ssh_options` are allow-listed.** Only `-p -i -l -J -o -c -m -b -B -4 -6 -C -q`
+  and a fixed set of `-o` keys are accepted. `ProxyCommand`, `LocalCommand`,
+  port forwarding, agent/X11 forwarding, `Control*`, `Include` and known_hosts
+  overrides are rejected at load time; use `-J`/`ProxyJump` for bastions.
+  Every poll also passes `ClearAllForwardings=yes`, `ForwardAgent=no` and
+  `ForwardX11=no`, and `squeue_args`/`sacct_args` may not contain shell characters.
+* **Host keys are verified.** Unattended polls run with
+  `StrictHostKeyChecking=yes`: a host must already be in `~/.ssh/known_hosts`.
+  `omniqueue login` connects interactively with `ask`, so you see and confirm a
+  new fingerprint yourself. Set `accept_new_host_keys = true` if you prefer
+  trust-on-first-use.
+* **Persistent connections are optional.** Idle masters close after
+  `persist_seconds` (default 4 h). Shorten it, or set
+  `persist_connections = false` for a fresh ssh per poll, if a lingering
+  authenticated session on your laptop worries you more than the reconnects.
+* **The web API is protected.** Every POST (`/api/refresh`, `/api/forget/...`)
+  must carry a per-process token that only the served page knows, which stops
+  other websites from triggering actions in your browser. Responses carry a
+  strict Content-Security-Policy and `nosniff`/`DENY` headers, and no inline
+  scripts are used.
 
 ## How data is gathered
 

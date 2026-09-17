@@ -8,7 +8,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import ClusterConfig, Config
+from .config import ClusterConfig, Config, secure_dir
 
 
 class RemoteError(Exception):
@@ -27,7 +27,8 @@ _NETWORK_RE = re.compile(
     re.I,
 )
 _AUTH_RE = re.compile(
-    r"permission denied|authentication|verification code|password|host key|too many authentication failures",
+    r"permission denied|authentication|verification code|password|host key|too many authentication failures|"
+    r"no .*host key is known|not in the list of known hosts",
     re.I,
 )
 
@@ -50,13 +51,8 @@ class CommandResult:
 
 def control_socket_dir(config: Config) -> Path:
     """Directory for the per-cluster ssh master sockets (created 0700)."""
-    d = config.data_dir / "ssh"
-    d.mkdir(parents=True, exist_ok=True)
-    try:
-        os.chmod(d, 0o700)
-    except OSError:
-        pass
-    return d
+    secure_dir(config.data_dir)
+    return secure_dir(config.data_dir / "ssh")
 
 
 def control_options(config: Config) -> list[str]:
@@ -91,7 +87,16 @@ def build_ssh_argv(
     config: Config | None = None,
     batch: bool = True,
 ) -> list[str]:
-    argv = ["ssh", "-o", f"ConnectTimeout={timeout}", "-o", "StrictHostKeyChecking=accept-new"]
+    # Unattended polls only talk to hosts already in known_hosts (or accept new keys when the
+    # config opts in). The interactive `omniqueue login` asks, so a fingerprint can be verified.
+    if not batch:
+        host_keys = "ask"
+    elif config is not None and config.accept_new_host_keys:
+        host_keys = "accept-new"
+    else:
+        host_keys = "yes"
+    argv = ["ssh", "-o", f"ConnectTimeout={timeout}", "-o", f"StrictHostKeyChecking={host_keys}",
+            "-o", "ClearAllForwardings=yes", "-o", "ForwardAgent=no", "-o", "ForwardX11=no"]
     if batch:
         argv += ["-o", "BatchMode=yes", "-T"]  # never hang on a password prompt
     if config is not None:
