@@ -154,9 +154,13 @@
   // when a new snapshot arrives, and stops polling altogether while the tab is hidden.
   let stateEtag = null;
   let stateTimer = null;
+  const CLIENT_ID = (() => { try { return sessionStorage.getItem("omniqueue.client") || (sessionStorage.setItem("omniqueue.client", "d-" + Math.random().toString(36).slice(2)), sessionStorage.getItem("omniqueue.client")); } catch { return "d-" + Math.random().toString(36).slice(2); } })();
   async function fetchState() {
     try {
-      const res = await fetch("/api/state", { cache: "no-store", headers: stateEtag ? { "If-None-Match": stateEtag } : {} });
+      // the client headers tell the server a dashboard is watching (it then polls at refresh_seconds)
+      const headers = { "X-OmniQueue-Client": CLIENT_ID, "X-OmniQueue-Interval": "0" };
+      if (stateEtag) headers["If-None-Match"] = stateEtag;
+      const res = await fetch("/api/state", { cache: "no-store", headers });
       if (res.status === 304) { if (state.error) { state.error = null; renderHeader(); } return; }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       stateEtag = res.headers.get("ETag");
@@ -404,7 +408,7 @@
       : `${okClusters}/${snap.clusters.length} clusters · ${counts.running} running · ${counts.pending} pending · ${counts.problem} failed`;
     line.classList.toggle("offline", !!snap.offline);
     rs.classList.toggle("spin", !!snap.refreshing);
-    rs.textContent = snap.refreshing ? "refreshing…" : `polled ${clock(snap.last_refresh)} · every ${snap.refresh_seconds}s`;
+    rs.textContent = snap.refreshing ? "refreshing…" : `polled ${clock(snap.last_refresh)} · every ${Math.round(snap.effective_refresh || snap.refresh_seconds)}s`;
     const windowLabel = { 24: "the last 24 h", 72: "the last 3 days", 168: "the last 7 days", 0: `the last ${snap.history_days} days of local history` }[state.windowHours]
       || `the last ${state.windowHours} h`;
     $("#footer-note").textContent = state.error

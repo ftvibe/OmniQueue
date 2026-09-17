@@ -11,6 +11,7 @@
   const pad = (n) => String(n).padStart(2, "0");
 
   let snapshot = null, etag = null, timer = null;
+  const CLIENT_ID = "w-" + Math.random().toString(36).slice(2);
   const store = (k, v) => { try { v === undefined ? localStorage.removeItem(k) : localStorage.setItem(k, JSON.stringify(v)); } catch { /* ignore */ } };
   const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
   let dismissed = new Set(load("omniqueue.widget.dismissed", []));
@@ -61,7 +62,10 @@
   // ---------- data ----------
   async function fetchState() {
     try {
-      const res = await fetch("/api/state", { cache: "no-store", headers: etag ? { "If-None-Match": etag } : {} });
+      // tell the server how often this widget re-reads: with only widgets open it polls the clusters at that rate
+      const headers = { "X-OmniQueue-Client": CLIENT_ID, "X-OmniQueue-Interval": String(REFRESH_S) };
+      if (etag) headers["If-None-Match"] = etag;
+      const res = await fetch("/api/state", { cache: "no-store", headers });
       if (res.status === 304) return;
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       etag = res.headers.get("ETag");
@@ -134,7 +138,8 @@
     fillList($("#w-finished"), finished, (j) => [`finished ${fmtWhen(j.end_time)}`, el("span", { class: "w-tag ok" }, `took ${fmtDur(j.elapsed_s)}`)], "nothing finished yet");
     $("#w-finished-count").textContent = "";
 
-    $("#w-status").textContent = `polled ${clock(snapshot.last_refresh)} · widget re-reads every ${Math.round(REFRESH_S / 60)} min`;
+    const eff = Math.round((snapshot.effective_refresh || snapshot.refresh_seconds) / 60);
+    $("#w-status").textContent = `polled ${clock(snapshot.last_refresh)} · clusters polled every ${eff} min · widget re-reads every ${Math.round(REFRESH_S / 60)} min`;
   }
   function fillList(ul, items, extra, emptyText) {
     ul.replaceChildren();

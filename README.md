@@ -234,8 +234,12 @@ last 48 h (dismiss them one by one or all at once), then the most recently
 started jobs with elapsed time against their limit and the most recently
 finished ones with how long they took.
 
-The widget re-reads the server every 10 minutes (the server keeps polling at
-its own `refresh_seconds`), and not at all while hidden. `↻` polls the
+The widget re-reads the server every 10 minutes, and not at all while hidden.
+The server polls the clusters as often as the fastest page watching it needs:
+with only the widget open that is the widget's 10 minutes, as soon as a
+dashboard is open it is `refresh_seconds` again, and with nothing open it
+falls back to `refresh_seconds`. Opening a dashboard after a quiet spell
+triggers a poll right away. `↻` polls the
 clusters right now. Click the bell to allow browser notifications: a new
 crashed or timed-out job then pops up a system notification even when the
 window is behind others. Query parameters tune it:

@@ -99,6 +99,13 @@ class Handler(BaseHTTPRequestHandler):
             self._send(HTTPStatus.UNAUTHORIZED, b"OmniQueue: access token required (open /?token=...)\n", "text/plain")
             return
         if path == "/api/state":
+            client = self.headers.get("X-OmniQueue-Client", "")
+            if client:
+                try:
+                    interval = float(self.headers.get("X-OmniQueue-Interval", "0"))
+                except ValueError:
+                    interval = 0.0
+                self.collector.register_viewer(client[:64], interval)
             self._json_if_changed(self.collector.state_etag(), self.collector.snapshot)
             return
         if path == "/api/load":

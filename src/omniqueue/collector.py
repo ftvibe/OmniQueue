@@ -56,6 +56,8 @@ class Collector:
         self.refreshing = False
         self._conn_cache: dict[str, tuple[float, bool]] = {}
         self.conn_cache_seconds = 10.0
+        # pages currently watching: client id -> (last heartbeat, wanted interval; 0 = config default)
+        self._viewers: dict[str, tuple[float, float]] = {}
         # cluster load view: fetched on demand, never as part of the regular poll
         self._load: dict[str, dict[str, Any]] = {}
         self._load_lock = threading.Lock()
@@ -233,7 +235,7 @@ class Collector:
 
     def state_etag(self) -> str:
         """Changes whenever a browser would see something new in /api/state."""
-        return f'"{self.last_refresh}-{self.refreshing}-{self.next_refresh}"'
+        return f'"{self.last_refresh}-{self.refreshing}-{self.next_refresh}-{self.effective_refresh():.0f}"'
 
     def load_etag(self) -> str:
         return f'"{self.load_fetched_at}-{self.load_fetching}"'
@@ -272,14 +274,41 @@ class Collector:
         self._stop.set()
         self._wake.set()
 
+    # -- viewers ------------------------------------------------------------------
+    def register_viewer(self, client_id: str, interval: float, now: float | None = None) -> None:
+        """A page reported in. `interval` is how often it re-reads (0 = the config default).
+        If it wants news sooner than the current schedule provides, poll now."""
+        now = now or time.time()
+        self._viewers[client_id] = (now, max(0.0, interval))
+        wanted = self.effective_refresh(now)
+        if self.last_refresh is not None and now - self.last_refresh >= wanted and not self.refreshing:
+            self._wake.set()
+
+    def effective_refresh(self, now: float | None = None) -> float:
+        """Poll interval implied by the pages watching: the fastest among them, the
+        config default when a dashboard is open or nobody is watching."""
+        now = now or time.time()
+        default = float(self.config.refresh_seconds)
+        wanted: list[float] = []
+        for cid, (seen, interval) in list(self._viewers.items()):
+            ttl = 45.0 if interval == 0 else interval * 2.5 + 30  # heartbeats arrive every interval
+            if now - seen > ttl:
+                del self._viewers[cid]
+                continue
+            wanted.append(default if interval == 0 else max(interval, default))
+        if not wanted:
+            return default
+        return min(wanted)
+
     def next_delay(self) -> float:
-        """Seconds until the next poll: the normal interval, or a quick retry
+        """Seconds until the next poll: the interval the viewers imply, or a quick retry
         (retry_seconds doubling per consecutive failure) while any cluster is failing."""
+        base = self.effective_refresh()
         failing = [s.failures for s in self._status.values() if not s.ok and s.failures]
         if not failing:
-            return float(self.config.refresh_seconds)
+            return base
         backoff = self.config.retry_seconds * 2 ** (min(failing) - 1)
-        return float(min(self.config.refresh_seconds, backoff))
+        return float(min(base, backoff))
 
     def _loop(self) -> None:
         while not self._stop.is_set():
@@ -311,6 +340,8 @@ class Collector:
             "refreshing": self.refreshing,
             "offline": bool(active) and reachable == 0 and self.last_refresh is not None,
             "refresh_seconds": self.config.refresh_seconds,
+            "effective_refresh": self.effective_refresh(),
+            "viewers": len(self._viewers),
             "lookback_hours": self.config.lookback_hours,
             "history_days": self.config.history_days,
             "clusters": clusters,

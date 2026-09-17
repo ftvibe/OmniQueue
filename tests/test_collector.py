@@ -229,6 +229,36 @@ class ActiveTests(unittest.TestCase):
             self.assertIsNone(ssh_mod.last_use(cfg.clusters[0], cfg))
 
 
+class ViewerPacedPolling(unittest.TestCase):
+    def test_interval_follows_viewers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Config(clusters=[ClusterConfig(name="a", host="a")], data_dir=Path(tmp), refresh_seconds=120)
+            col = Collector(cfg, HistoryStore(Path(tmp) / "h.json"))
+            t = 1_000_000.0
+            self.assertEqual(col.effective_refresh(t), 120)  # nobody watching: config default
+            col.register_viewer("widget", 600, now=t)
+            self.assertEqual(col.effective_refresh(t), 600)  # widget alone: its 10 minutes
+            col.register_viewer("dash", 0, now=t)
+            self.assertEqual(col.effective_refresh(t), 120)  # a dashboard wants the default
+            self.assertEqual(col.effective_refresh(t + 30), 120)  # dashboard heartbeats every 5 s: still fresh
+            # after 45 s without a heartbeat the dashboard is forgotten
+            self.assertEqual(col.effective_refresh(t + 100), 600)
+            # the widget is forgotten too once it stops re-reading
+            self.assertEqual(col.effective_refresh(t + 600 * 2.5 + 31), 120)
+            # a viewer can never make the server poll faster than the config allows
+            col.register_viewer("eager", 5, now=t)
+            self.assertEqual(col.effective_refresh(t), 120)
+
+    def test_new_faster_viewer_wakes_the_poller(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Config(clusters=[ClusterConfig(name="a", host="a")], data_dir=Path(tmp), refresh_seconds=120)
+            col = Collector(cfg, HistoryStore(Path(tmp) / "h.json"))
+            t = 1_000_000.0
+            col.last_refresh = t - 300  # last poll 5 min ago (widget pace)
+            col.register_viewer("dash", 0, now=t)
+            self.assertTrue(col._wake.is_set())  # dashboard opened: poll now rather than wait
+
+
 class CloseConnectionTests(unittest.TestCase):
     def test_stale_socket_is_removed_and_master_killed(self):
         from omniqueue import ssh as ssh_mod

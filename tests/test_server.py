@@ -118,6 +118,19 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn(b"Recently", self.get("/widget")[2])
 
+    def test_viewer_headers(self):
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/state",
+                                     headers={"X-OmniQueue-Client": "w-test", "X-OmniQueue-Interval": "600"})
+        with urllib.request.urlopen(req) as r:
+            snap = json.loads(r.read())
+        self.assertGreaterEqual(snap["viewers"], 1)
+        self.assertEqual(snap["effective_refresh"], 600)
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/state",
+                                     headers={"X-OmniQueue-Client": "d-test", "X-OmniQueue-Interval": "0"})
+        with urllib.request.urlopen(req) as r:
+            snap = json.loads(r.read())
+        self.assertEqual(snap["effective_refresh"], snap["refresh_seconds"])
+
     def test_404(self):
         with self.assertRaises(urllib.error.HTTPError) as cm:
             self.get("/../pyproject.toml")
