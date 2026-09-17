@@ -151,19 +151,6 @@ def _mux(cluster: ClusterConfig, config: Config, command: str) -> list[str]:
             + cluster.ssh_options + ["--", cluster.host or ""])
 
 
-def shell(cluster: ClusterConfig, config: Config, command: str = "") -> int:
-    """Interactive ssh session over the shared connection (no second login when
-    the master is open; otherwise this login opens it)."""
-    if cluster.is_local:
-        return subprocess.call([os.environ.get("SHELL", "sh")] + (["-c", command] if command else []))
-    if config.persist_connections and socket_path(cluster, config).exists() and not connection_alive(cluster, config):
-        close_connection(cluster, config)
-    argv = build_ssh_argv(cluster, command, config.ssh_timeout, config, batch=False)
-    if not command:
-        argv.insert(1, "-t")  # force a tty for the interactive shell
-    return subprocess.call(argv)
-
-
 def connection_alive(cluster: ClusterConfig, config: Config) -> bool:
     """True when a master connection for this cluster is open and answering."""
     if cluster.is_local or not config.persist_connections or not socket_path(cluster, config).exists():

@@ -129,27 +129,6 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class ShellTests(unittest.TestCase):
-    def test_shell_reuses_master_options(self):
-        from omniqueue import ssh as ssh_mod
-
-        with tempfile.TemporaryDirectory() as tmp:
-            cfg = Config(clusters=[ClusterConfig(name="d", host="d.example", user="flotr")], data_dir=Path(tmp))
-            with mock.patch.object(ssh_mod.subprocess, "call", return_value=0) as call:
-                ssh_mod.shell(cfg.clusters[0], cfg)
-                argv = call.call_args[0][0]
-            self.assertEqual(argv[:2], ["ssh", "-t"])
-            self.assertIn(f"ControlPath={tmp}/ssh/cm-d", argv)
-            self.assertIn("StrictHostKeyChecking=ask", argv)
-            self.assertNotIn("BatchMode=yes", argv)
-            self.assertEqual(argv[-2:], ["--", "d.example"])
-            with mock.patch.object(ssh_mod.subprocess, "call", return_value=0) as call:
-                ssh_mod.shell(cfg.clusters[0], cfg, "squeue --me")
-                argv = call.call_args[0][0]
-            self.assertEqual(argv[-1], "squeue --me")
-            self.assertNotIn("-t", argv)
-
-
 class CloseConnectionTests(unittest.TestCase):
     def test_stale_socket_is_removed_and_master_killed(self):
         from omniqueue import ssh as ssh_mod
