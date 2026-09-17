@@ -12,6 +12,7 @@
   --tint: 16%;
   --shadow: 0 1px 2px rgba(7,58,52,.08), 0 4px 16px rgba(7,58,52,.06);
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --text: "American Typewriter", "AmericanTypewriter", "Courier Prime", "Nimbus Mono PS", "Courier New", Courier, monospace;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -39,7 +40,7 @@
   --unknown-bg: color-mix(in srgb, var(--unknown) var(--tint), var(--surface));
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; background: var(--bg); color: var(--ink); color-scheme: light dark; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); color-scheme: light dark; font: 14px/1.45 var(--text); }
 button, input, select { font: inherit; color: inherit; }
 button { cursor: pointer; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; }
 button:hover { border-color: var(--accent); }
@@ -51,10 +52,10 @@ kbd { font: 11px var(--mono); background: var(--surface-2); border: 1px solid va
 .mono { font-family: var(--mono); font-size: 12.5px; }
 
 .top { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; justify-content: space-between;
-  padding: 12px 20px; background: var(--surface); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 5; }
-.brand { display: flex; align-items: baseline; gap: 12px; }
-.brand h1 { margin: 0; font-size: 18px; letter-spacing: .3px; }
-.logo { width: 34px; height: 34px; image-rendering: pixelated; align-self: center; }
+  padding: 14px 24px; min-height: 92px; background: var(--surface); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 5; }
+.brand { display: flex; align-items: center; gap: 16px; }
+.brand h1 { margin: 0; font-size: 28px; letter-spacing: .5px; font-weight: 700; line-height: 1; }
+.logo { width: 64px; height: 64px; image-rendering: pixelated; flex: none; }
 #theme { padding: 5px 8px; min-width: 38px; }
 .sub { color: var(--muted); }
 .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -70,7 +71,7 @@ kbd { font: 11px var(--mono); background: var(--surface-2); border: 1px solid va
 .card.err { border-color: var(--problem); border-left-color: var(--problem); }
 .card-head { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; align-items: center; }
 .card-logo { grid-row: 1 / span 2; width: 34px; height: 34px; border-radius: 7px; object-fit: contain; background: var(--surface-2); }
-.card-logo.initials { display: flex; align-items: center; justify-content: center; font: 700 13px/1 system-ui, sans-serif; color: #fff; background: var(--card-color, var(--muted)); letter-spacing: .5px; }
+.card-logo.initials { display: flex; align-items: center; justify-content: center; font: 700 13px/1 var(--text); color: #fff; background: var(--card-color, var(--muted)); letter-spacing: .5px; }
 .card-head b { font-size: 15px; line-height: 1.2; }
 .card-head small { color: var(--muted); font-family: var(--mono); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card-counts { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 10px; }

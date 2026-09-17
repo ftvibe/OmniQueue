@@ -93,11 +93,7 @@ def near_edge(x: int, y: int, reach: int) -> bool:
 
 
 dark = {(x, y) for x, y in body_px if near_edge(x, y, 1)}
-shade = {(x, y) for x, y in body_px if (x, y) not in dark and near_edge(x, y, 3)}
-# the underside of the mantle, where the head narrows, sits in shadow
-for x, y in body_px:
-    if 15 <= y <= 22:
-        (dark if y >= 17 and abs(x - 24) > 3 else shade).add((x, y))
+shade = {(x, y) for x, y in body_px if (x, y) not in dark and near_edge(x, y, 2)}
 for p in dark:
     g[p] = DARK
 for p in shade:
