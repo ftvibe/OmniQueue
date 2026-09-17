@@ -1,5 +1,7 @@
 # OmniQueue
 
+<img src="src/omniqueue/static/logo.svg" width="96" align="right" alt="">
+
 One dashboard for your Slurm jobs on several supercomputers.
 
 OmniQueue logs into each cluster over ssh, asks `squeue` and `sacct` what your
@@ -176,6 +178,9 @@ Times are shown exactly as the cluster reports them (cluster local time, no
 zone).
 
 ## Development
+
+The logo is a 24x24 sprite drawn as ASCII in `tools/make_logo.py`; edit it and
+re-run the script to regenerate `logo.svg` and `favicon.svg`.
 
 ```sh
 python -m unittest discover -s tests -v

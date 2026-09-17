@@ -52,9 +52,9 @@ kbd { font: 11px var(--mono); background: var(--surface-2); border: 1px solid va
 
 .top { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; justify-content: space-between;
   padding: 12px 20px; background: var(--surface); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 5; }
-.brand { display: flex; align-items: baseline; gap: 10px; }
+.brand { display: flex; align-items: baseline; gap: 12px; }
 .brand h1 { margin: 0; font-size: 18px; letter-spacing: .3px; }
-.logo { color: var(--accent); font-weight: 700; }
+.logo { width: 34px; height: 34px; image-rendering: pixelated; align-self: center; }
 #theme { padding: 5px 8px; min-width: 38px; }
 .sub { color: var(--muted); }
 .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
