@@ -13,7 +13,7 @@ import math
 from pathlib import Path
 
 W = H = 48
-BODY, SHADE, EYE = "#4f8f8a", "#2f6a66", "#0d3b38"
+HI, BODY, SHADE, DARK, EYE = "#7fb5b0", "#4f8f8a", "#3b7672", "#26564f", "#0d3b38"
 BALLS = ["#e2856c", "#b39a4b", "#a9cbc8", "#c8b47c", "#f3c6b6", "#8fa35a", "#b07a8a", "#fbefdc"]
 BALL_HI = "#fbefdc"
 
@@ -54,12 +54,12 @@ def arm(points: list[tuple[float, float]], s0: int, s1: int) -> None:
         done += seg
 
 
-# ---- head: an egg-shaped mantle, widest above the middle, tapering to the arm crown ----
-# half-width of the mantle per row (centre x = 24)
+# ---- head: spherical mantle on top, a narrower head below it, eye bulges at the bottom ----
+# half-width of the body per row (centre x = 24)
 PROFILE = {
-    1: 3, 2: 5, 3: 7, 4: 8, 5: 9, 6: 10, 7: 10, 8: 11, 9: 11, 10: 11, 11: 11, 12: 11, 13: 11,
-    14: 11, 15: 10, 16: 10, 17: 10, 18: 9, 19: 9, 20: 9, 21: 8, 22: 8, 23: 8, 24: 7, 25: 7,
-    26: 7, 27: 7, 28: 7, 29: 8, 30: 8, 31: 9, 32: 9,
+    1: 4, 2: 6, 3: 8, 4: 9, 5: 10, 6: 10, 7: 11, 8: 11, 9: 11, 10: 11, 11: 11, 12: 11, 13: 11,
+    14: 10, 15: 10, 16: 9, 17: 8, 18: 7, 19: 7, 20: 6, 21: 6, 22: 6, 23: 6, 24: 7, 25: 8,
+    26: 9, 27: 9, 28: 9, 29: 8, 30: 8, 31: 9, 32: 9,
 }
 for y, hw in PROFILE.items():
     for x in range(24 - hw, 24 + hw):
@@ -79,16 +79,36 @@ ARMS = [
 for pts in ARMS:
     arm(pts, 5, 3)
 
-# ---- shading: darker tone on lower and right edges -------------------------------------
-for (x, y), c in list(g.items()):
-    if c == BODY and (g.get((x, y + 1)) is None or g.get((x + 1, y)) is None):
-        g[(x, y)] = SHADE
+# ---- shading: dark edge and a shade band along lower/right, highlight on the upper-left ----
+def empty(x: int, y: int) -> bool:
+    return g.get((x, y)) is None
+
+
+body_px = [(x, y) for (x, y), c in g.items() if c == BODY]
+dark = {(x, y) for x, y in body_px if empty(x, y + 1) or empty(x + 1, y) or empty(x + 1, y + 1)}
+shade = {
+    (x, y) for x, y in body_px
+    if (x, y) not in dark and any(
+        (x + dx, y + dy) in dark for dx, dy in ((0, 1), (1, 0), (1, 1), (0, 2), (2, 0), (2, 1), (1, 2))
+    )
+}
+for p in dark:
+    g[p] = DARK
+for p in shade:
+    g[p] = SHADE
+# highlight: two-pixel rim on the upper-left of the mantle only
+for x, y in body_px:
+    if y <= 14 and x <= 23 and g.get((x, y)) == BODY and (empty(x - 1, y) or empty(x, y - 1) or empty(x - 1, y - 1) or empty(x - 2, y) or empty(x, y - 2)):
+        g[(x, y)] = HI
+for x, y in ((22, 4), (23, 4), (21, 5), (20, 6), (19, 7), (18, 8), (17, 10), (17, 11)):
+    if g.get((x, y)) == BODY:
+        g[(x, y)] = HI
 
 # ---- eyes: two plain squares ---------------------------------------------------------------
-for ex in (18, 28):
+for ex in (16, 30):
     for dx in range(2):
         for dy in range(2):
-            put(ex + dx, 20 + dy, EYE)
+            put(ex + dx, 26 + dy, EYE)
 
 
 # ---- balls at the arm tips, one colour per source -------------------------------------------
