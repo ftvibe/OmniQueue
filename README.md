@@ -43,6 +43,10 @@ refresh_seconds = 60      # how often every cluster is polled
 lookback_hours  = 72      # how far back sacct is asked for finished jobs
 history_days    = 30      # finished jobs stay in the local history this long
 ssh_timeout     = 20
+persist_connections = true   # keep one ssh connection per cluster open between polls
+persist_seconds = 28800      # ... for this long after the last poll (8 h)
+keepalive_seconds = 15       # notice a dead connection within ~45 s
+retry_seconds   = 15         # retry failed clusters after 15 s, 30 s, 60 s ... up to refresh_seconds
 listen_host     = "127.0.0.1"
 listen_port     = 8765
 
@@ -86,6 +90,29 @@ You type the password/OTP once; the poller reuses that connection afterwards.
 Set `persist_connections = false` to fall back to a fresh ssh per poll (keys or
 an agent are then required). The sockets live in `~/.local/share/omniqueue/ssh/`.
 
+### On a laptop that changes networks
+
+Switching from wifi to a phone hotspot, or closing the lid, kills the TCP
+connection underneath an ssh master without telling it. OmniQueue copes:
+
+* Every connection runs with `ServerAliveInterval` (default 15 s, three misses
+  allowed), so a master on a dead link exits by itself within about 45 s and
+  the next poll opens a fresh one.
+* A poll that times out or hits a network error closes that cluster's master
+  immediately instead of waiting for the keepalive.
+* While any cluster is failing, polls retry after `retry_seconds` (15 s),
+  doubling each time up to the normal `refresh_seconds`, so you are back within
+  seconds of the network returning rather than a full interval later.
+* The card says what went wrong: a network problem ("are you online?"),
+  a dropped connection, or a login that needs your password / 2FA again, in
+  which case it tells you to run `omniqueue login <cluster>`. When no cluster
+  is reachable the header says so and the table keeps showing the last known
+  jobs from the local history.
+
+Clusters that use keys or an agent reconnect fully automatically. Clusters that
+ask for a one-time code need `omniqueue login <cluster>` once after each
+network change that dropped the connection.
+
 ## Commands
 
 | command | what it does |
@@ -93,6 +120,7 @@ an agent are then required). The sockets live in `~/.local/share/omniqueue/ssh/`
 | `omniqueue monitor [--port N]` | poll all clusters in the background, serve the dashboard and open it |
 | `omniqueue serve [--open]` | the same without opening a browser (for a headless machine) |
 | `omniqueue login [CLUSTER...] [--close]` | open (or close) the persistent ssh connection, allowing password / 2FA |
+| `omniqueue login --force CLUSTER` | reconnect a cluster whose connection is stale |
 | `omniqueue list [--state running] ...` | poll once and print a table to the terminal |
 | `omniqueue check` | connect to every cluster once and report problems |
 | `omniqueue init [--force]` | write the example config |

@@ -249,7 +249,10 @@
     const counts = { running: 0, pending: 0, ok: 0, problem: 0 };
     for (const j of snap.jobs) if (counts[j.category] !== undefined) counts[j.category]++;
     const okClusters = snap.clusters.filter((c) => c.ok).length;
-    line.textContent = `${okClusters}/${snap.clusters.length} clusters · ${counts.running} running · ${counts.pending} pending · ${counts.problem} failed`;
+    line.textContent = snap.offline
+      ? `no cluster reachable, are you offline? retrying at ${clock(snap.next_refresh)} · showing last known jobs`
+      : `${okClusters}/${snap.clusters.length} clusters · ${counts.running} running · ${counts.pending} pending · ${counts.problem} failed`;
+    line.classList.toggle("offline", !!snap.offline);
     rs.classList.toggle("spin", !!snap.refreshing);
     rs.textContent = snap.refreshing ? "refreshing…" : `polled ${clock(snap.last_refresh)} · every ${snap.refresh_seconds}s`;
     $("#footer-note").textContent = state.error
@@ -276,7 +279,8 @@
           ? el("div", { class: "card-counts" },
               ...[["running", "running"], ["pending", "pending"], ["problem", "failed"], ["ok", "done"]].map(([k, label]) =>
                 el("span", { class: `pill ${k}`, title: label }, el("b", {}, counts[k] || 0), label)))
-          : el("div", { class: "card-error" }, el("span", { class: "warn-icon" }, "⚠"), el("span", {}, c.error || "not reached yet")),
+          : el("div", { class: `card-error ${c.error_kind || ""}` }, el("span", { class: "warn-icon" }, "⚠"),
+              el("span", {}, el("span", {}, c.error || "not reached yet"), el("small", { class: "hint" }, errorHint(c)))),
         el("div", { class: "card-foot" },
           el("span", {}, c.ok ? `polled ${clock(c.last_success)}` : c.last_success ? `last ok ${clock(c.last_success)}` : "never reached"),
           el("span", {}, c.ok && c.poll_seconds != null ? `${c.poll_seconds.toFixed(1)}s` : ""),
@@ -284,6 +288,17 @@
         c.ok && c.warning ? el("div", { class: "card-warn" }, `⚠ ${c.warning}`) : null,
       );
       root.append(card);
+    }
+  }
+
+  function errorHint(c) {
+    const snap = state.snapshot;
+    const retry = snap?.next_refresh ? ` · retry at ${clock(snap.next_refresh)}` : "";
+    switch (c.error_kind) {
+      case "auth": return `login needed: run  omniqueue login ${c.name}${retry}`;
+      case "network": return `network problem, are you online?${retry}`;
+      case "timeout": return `no answer, connection dropped${retry}`;
+      default: return c.failures > 1 ? `${c.failures} failed polls${retry}` : retry.slice(3);
     }
   }
 

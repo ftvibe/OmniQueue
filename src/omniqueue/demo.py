@@ -70,7 +70,9 @@ class DemoCollector(Collector):
         time.sleep(self._rng.uniform(0.05, 0.4))
         if cluster.name == "offline-cluster":
             status.ok = False
-            status.error = "ssh failed: Connection timed out (demo)"
+            status.error = "ssh failed: connect to host unreachable.example.org port 22: Connection timed out"
+            status.error_kind = "network"
+            status.failures += 1
             return [], status
         jobs = make_demo_jobs(cluster.name, self._rng)
         status.ok = True

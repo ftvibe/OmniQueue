@@ -13,7 +13,7 @@ from .config import ClusterConfig, Config
 from .history import HistoryStore
 from .models import Job
 from .slurm import combined_command, merge_jobs, parse_sacct, parse_squeue, split_combined_output
-from .ssh import RemoteError, run_on_cluster
+from .ssh import RemoteError, close_connection, run_on_cluster
 
 log = logging.getLogger("omniqueue.collector")
 
@@ -24,6 +24,8 @@ class ClusterStatus:
     host: str
     ok: bool = False
     error: str | None = None
+    error_kind: str | None = None  # network | auth | timeout | other
+    failures: int = 0  # consecutive failed polls
     warning: str | None = None
     last_attempt: float | None = None
     last_success: float | None = None
@@ -50,6 +52,7 @@ class Collector:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.last_refresh: float | None = None
+        self.next_refresh: float | None = None
         self.refreshing = False
 
     def _logo_url(self, cluster: ClusterConfig) -> str | None:
@@ -99,14 +102,22 @@ class Collector:
         except RemoteError as exc:
             status.ok = False
             status.error = str(exc)
+            status.error_kind = exc.kind
+            status.failures += 1
             status.poll_seconds = time.monotonic() - t0
-            log.warning("%s: %s", cluster.name, exc)
+            log.warning("%s: %s (%s)", cluster.name, exc, exc.kind)
+            if exc.kind in ("timeout", "network"):
+                # the master connection may be hung on a dead link (laptop changed
+                # network or woke from sleep): drop it so the next poll reconnects
+                close_connection(cluster, self.config)
             return self.history.jobs_for(cluster.name), status
 
         merged = merge_jobs(squeue_jobs, sacct_jobs)
         jobs = self.history.update_cluster(cluster.name, merged)
         status.ok = True
         status.error = None
+        status.error_kind = None
+        status.failures = 0
         status.warning = "; ".join(warnings) or None
         status.last_success = time.time()
         status.poll_seconds = time.monotonic() - t0
@@ -146,13 +157,24 @@ class Collector:
         self._stop.set()
         self._wake.set()
 
+    def next_delay(self) -> float:
+        """Seconds until the next poll: the normal interval, or a quick retry
+        (retry_seconds doubling per consecutive failure) while any cluster is failing."""
+        failing = [s.failures for s in self._status.values() if not s.ok and s.failures]
+        if not failing:
+            return float(self.config.refresh_seconds)
+        backoff = self.config.retry_seconds * 2 ** (min(failing) - 1)
+        return float(min(self.config.refresh_seconds, backoff))
+
     def _loop(self) -> None:
         while not self._stop.is_set():
             try:
                 self.refresh()
             except Exception:  # noqa: BLE001 - keep the poller alive whatever happens
                 log.exception("refresh failed")
-            self._wake.wait(self.config.refresh_seconds)
+            delay = self.next_delay()
+            self.next_refresh = time.time() + delay
+            self._wake.wait(delay)
             self._wake.clear()
 
     # -- snapshot for the API -------------------------------------------------------
@@ -162,10 +184,13 @@ class Collector:
             clusters = [s.to_dict() for s in self._status.values()]
         for j in jobs:
             j["exit_summary"] = _exit_summary(j)
+        reachable = sum(1 for c in clusters if c["ok"])
         return {
             "now": time.time(),
             "last_refresh": self.last_refresh,
+            "next_refresh": self.next_refresh,
             "refreshing": self.refreshing,
+            "offline": bool(clusters) and reachable == 0 and self.last_refresh is not None,
             "refresh_seconds": self.config.refresh_seconds,
             "lookback_hours": self.config.lookback_hours,
             "clusters": clusters,

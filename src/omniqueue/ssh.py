@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,32 @@ from .config import ClusterConfig, Config
 
 class RemoteError(Exception):
     """The command could not be run or returned an error."""
+
+    def __init__(self, message: str, kind: str = "other"):
+        super().__init__(message)
+        self.kind = kind  # network | auth | timeout | other
+
+
+_NETWORK_RE = re.compile(
+    r"timed out|no route to host|network is unreachable|could not resolve|name or service not known|"
+    r"temporary failure in name resolution|connection refused|connection reset|broken pipe|"
+    r"connection closed by|closed by remote host|unable to connect|kex_exchange_identification|"
+    r"software caused connection abort|control socket connect",
+    re.I,
+)
+_AUTH_RE = re.compile(
+    r"permission denied|authentication|verification code|password|host key|too many authentication failures",
+    re.I,
+)
+
+
+def classify_error(stderr: str) -> str:
+    """Guess why ssh failed from its stderr: network, auth or other."""
+    if _AUTH_RE.search(stderr):
+        return "auth"
+    if _NETWORK_RE.search(stderr):
+        return "network"
+    return "other"
 
 
 @dataclass
@@ -40,10 +67,17 @@ def control_options(config: Config) -> list[str]:
     so they skip the TCP/key handshake (and any password or 2FA prompt, which
     ``omniqueue login`` can satisfy once by hand).
     """
+    # Keepalives make the master notice a dead link (new network, laptop woke up)
+    # within keepalive_seconds * 3 and exit, so the next poll opens a fresh one.
+    opts = [
+        "-o", f"ServerAliveInterval={config.keepalive_seconds}",
+        "-o", "ServerAliveCountMax=3",
+        "-o", "TCPKeepAlive=yes",
+    ]
     if not config.persist_connections:
-        return []
+        return opts
     sock = control_socket_dir(config) / "cm-%C"  # %C = hash of user@host:port
-    return [
+    return opts + [
         "-o", "ControlMaster=auto",
         "-o", f"ControlPath={sock}",
         "-o", f"ControlPersist={config.persist_seconds}",
@@ -123,7 +157,8 @@ def run_on_cluster(
     except FileNotFoundError as exc:
         raise RemoteError(f"{argv[0]} not found: {exc}") from exc
     except subprocess.TimeoutExpired as exc:
-        raise RemoteError(f"timed out after {total_timeout}s") from exc
+        raise RemoteError(f"timed out after {total_timeout}s", kind="timeout") from exc
     if proc.returncode == 255 and not cluster.is_local:
-        raise RemoteError(f"ssh failed: {proc.stderr.strip() or 'connection error'}")
+        err = proc.stderr.strip() or "connection error"
+        raise RemoteError(f"ssh failed: {err}", kind=classify_error(err))
     return CommandResult(proc.stdout, proc.stderr, proc.returncode)

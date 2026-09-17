@@ -49,6 +49,8 @@ class Config:
     ssh_timeout: int = 20
     persist_connections: bool = True  # keep one ssh master connection per cluster open between polls
     persist_seconds: int = 8 * 3600  # how long an idle master connection stays open
+    keepalive_seconds: int = 15  # ssh ServerAliveInterval; a dead link is noticed after 3 misses
+    retry_seconds: int = 15  # first retry delay after a failed poll (doubles up to refresh_seconds)
     listen_host: str = "127.0.0.1"
     listen_port: int = 8765
     data_dir: Path = field(default_factory=default_data_dir)
@@ -88,6 +90,8 @@ history_days    = 30      # finished jobs stay in the local history this long
 ssh_timeout     = 20      # seconds before a hanging ssh is given up on
 persist_connections = true   # keep one ssh connection per cluster open between polls
 persist_seconds = 28800      # ... for this long after the last poll (8 h)
+keepalive_seconds = 15       # notice a dead connection (new wifi, sleep) within ~45 s
+retry_seconds   = 15         # retry a failed cluster after 15 s, 30 s, 60 s ... up to refresh_seconds
 listen_host     = "127.0.0.1"
 listen_port     = 8765
 
@@ -151,7 +155,8 @@ def config_from_dict(raw: dict) -> Config:
         clusters.append(ClusterConfig(**c))
 
     cfg = Config(clusters=clusters)
-    for key in ("refresh_seconds", "lookback_hours", "history_days", "ssh_timeout", "listen_port", "persist_seconds"):
+    for key in ("refresh_seconds", "lookback_hours", "history_days", "ssh_timeout", "listen_port",
+                "persist_seconds", "keepalive_seconds", "retry_seconds"):
         if key in raw:
             try:
                 setattr(cfg, key, int(raw[key]))

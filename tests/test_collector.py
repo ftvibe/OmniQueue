@@ -45,7 +45,7 @@ class SshArgvTests(unittest.TestCase):
             self.assertTrue(any(o.startswith(f"ControlPath={tmp}/ssh/cm-") for o in opts))
             self.assertEqual(stat.S_IMODE(os.stat(Path(tmp) / "ssh").st_mode), 0o700)
             cfg.persist_connections = False
-            self.assertEqual(control_options(cfg), [])
+            self.assertFalse(any(o.startswith("Control") for o in control_options(cfg)))
 
     def test_argv(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -122,3 +122,69 @@ class LocalClusterEndToEnd(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ResilienceTests(unittest.TestCase):
+    def test_classify_error(self):
+        from omniqueue.ssh import classify_error
+
+        self.assertEqual(classify_error("ssh: connect to host x port 22: Connection timed out"), "network")
+        self.assertEqual(classify_error("ssh: Could not resolve hostname x: Temporary failure in name resolution"), "network")
+        self.assertEqual(classify_error("client_loop: send disconnect: Broken pipe"), "network")
+        self.assertEqual(classify_error("x: Permission denied (publickey,keyboard-interactive)."), "auth")
+        self.assertEqual(classify_error("Host key verification failed."), "auth")
+        self.assertEqual(classify_error("something odd"), "other")
+
+    def test_keepalive_options_always_present(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Config(clusters=[ClusterConfig(name="c", host="c")], data_dir=Path(tmp), keepalive_seconds=7)
+            for persist in (True, False):
+                cfg.persist_connections = persist
+                opts = control_options(cfg)
+                self.assertIn("ServerAliveInterval=7", opts)
+                self.assertIn("ServerAliveCountMax=3", opts)
+                self.assertEqual("ControlMaster=auto" in opts, persist)
+
+    def test_retry_backoff(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Config(clusters=[ClusterConfig(name="a", host="a"), ClusterConfig(name="b", host="b")],
+                         data_dir=Path(tmp), refresh_seconds=120, retry_seconds=15)
+            col = Collector(cfg, HistoryStore(Path(tmp) / "h.json"))
+            self.assertEqual(col.next_delay(), 120)
+            a = col._status["a"]
+            a.ok, a.failures = False, 1
+            self.assertEqual(col.next_delay(), 15)
+            a.failures = 2
+            self.assertEqual(col.next_delay(), 30)
+            a.failures = 3
+            self.assertEqual(col.next_delay(), 60)
+            a.failures = 10
+            self.assertEqual(col.next_delay(), 120)  # capped at the normal interval
+            b = col._status["b"]
+            b.ok, b.failures = False, 1  # the freshest failure drives the retry
+            self.assertEqual(col.next_delay(), 15)
+
+    def test_timeout_tears_down_master_and_reports_kind(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Config(clusters=[ClusterConfig(name="far", host="far.example")], data_dir=Path(tmp), ssh_timeout=1)
+            col = Collector(cfg, HistoryStore(Path(tmp) / "h.json"))
+            from omniqueue import collector as collector_mod
+            from omniqueue.ssh import RemoteError
+
+            with mock.patch.object(collector_mod, "run_on_cluster", side_effect=RemoteError("timed out after 3s", kind="timeout")), \
+                 mock.patch.object(collector_mod, "close_connection") as closed:
+                col.refresh()
+            closed.assert_called_once()
+            snap = col.snapshot()
+            st = snap["clusters"][0]
+            self.assertEqual(st["error_kind"], "timeout")
+            self.assertEqual(st["failures"], 1)
+            self.assertTrue(snap["offline"])
+
+            with mock.patch.object(collector_mod, "run_on_cluster",
+                                   side_effect=RemoteError("ssh failed: Permission denied (publickey)", kind="auth")), \
+                 mock.patch.object(collector_mod, "close_connection") as closed:
+                col.refresh()
+            closed.assert_not_called()  # an auth failure is not a dead link
+            self.assertEqual(col.snapshot()["clusters"][0]["error_kind"], "auth")
+            self.assertEqual(col.snapshot()["clusters"][0]["failures"], 2)
