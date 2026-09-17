@@ -19,7 +19,9 @@
     selected: null,
     error: null,
     matches: new Map(), // job key -> fuzzy match info for the current search
-    view: prefs.view || "jobs", // "jobs" | "load"
+    view: "jobs", // "jobs" | "load"; the load view is entered explicitly and fetched on demand
+    load: null, // last /api/load answer
+    loadTimer: null,
   };
 
   // ---------- helpers ----------
@@ -29,7 +31,7 @@
   function savePrefs() {
     try {
       localStorage.setItem("omniqueue.prefs", JSON.stringify({
-        tab: state.tab, sort: state.sort, hiddenClusters: [...state.hiddenClusters], windowHours: state.windowHours, view: state.view,
+        tab: state.tab, sort: state.sort, hiddenClusters: [...state.hiddenClusters], windowHours: state.windowHours,
       }));
     } catch { /* ignore */ }
   }
@@ -249,15 +251,58 @@
     $("#load").hidden = !load;
     $("#jobs-view").hidden = load;
     $("#view-toggle").classList.toggle("active", load);
-    $("#view-toggle").firstChild.textContent = load ? "my jobs " : "cluster load ";
     for (const b of $$("#tabs button[data-tab]")) b.disabled = load;
     if (load) renderLoad(); else renderTable();
   }
 
-  function toggleView() {
-    state.view = state.view === "load" ? "jobs" : "load";
-    savePrefs();
+  // `l`: enter the load view and fetch; `l` again (or the button): fetch again. `q`: back to the queue.
+  function enterLoadView() {
+    state.view = "load";
+    closeDrawer();
     renderView();
+    refreshLoad();
+  }
+  function leaveLoadView() {
+    if (state.view !== "load") return;
+    state.view = "jobs";
+    stopLoadPolling();
+    renderView();
+  }
+  async function refreshLoad() {
+    try { await post("/api/load/refresh"); } catch { /* shown by the status line */ }
+    state.load = { ...(state.load || {}), fetching: true };
+    renderLoadStatus();
+    startLoadPolling();
+  }
+  function startLoadPolling() {
+    stopLoadPolling();
+    state.loadTimer = setInterval(fetchLoad, 1000);
+    fetchLoad();
+  }
+  function stopLoadPolling() {
+    if (state.loadTimer) clearInterval(state.loadTimer);
+    state.loadTimer = null;
+  }
+  async function fetchLoad() {
+    try {
+      const res = await fetch("/api/load", { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      state.load = await res.json();
+    } catch (err) {
+      state.load = { ...(state.load || {}), fetching: false, error: err.message };
+    }
+    if (!state.load.fetching) stopLoadPolling();
+    if (state.view === "load") renderLoad();
+  }
+  function renderLoadStatus() {
+    const l = state.load;
+    const st = $("#load-status");
+    if (!l) { st.textContent = ""; return; }
+    st.classList.toggle("spin", !!l.fetching);
+    st.textContent = l.fetching ? "fetching cluster load…"
+      : l.error ? `cannot reach the OmniQueue server (${l.error})`
+      : l.fetched_at ? `cluster load as of ${clock(l.fetched_at)} · fetched on demand only, not on the regular poll`
+      : "no load fetched yet";
   }
 
   // ---------- cluster load view ----------
@@ -270,30 +315,35 @@
   }
 
   function renderLoad() {
-    const root = $("#load");
+    renderLoadStatus();
+    const root = $("#load-clusters");
     root.replaceChildren();
-    const snap = state.snapshot;
-    if (!snap) return;
-    for (const c of snap.clusters) {
+    const l = state.load;
+    if (!l || !l.clusters) return;
+    for (const c of l.clusters) {
       if (state.hiddenClusters.has(c.name)) continue;
       const box = el("section", { class: "load-cluster", style: `--card-color:${clusterColor(c.name)}` });
       const head = el("div", { class: "load-head" }, logoEl(c), el("b", {}, c.name));
-      if (c.load && c.load.utilisation !== null && c.load.utilisation !== undefined) {
-        const pct = Math.round(c.load.utilisation * 100);
+      const sum = c.summary;
+      if (sum && sum.utilisation !== null && sum.utilisation !== undefined) {
+        const pct = Math.round(sum.utilisation * 100);
         head.append(
-          el("span", { class: "gauge", title: `${fmtInt(c.load.cpus_allocated)} of ${fmtInt(c.load.cpus_total)} CPUs allocated` },
+          el("span", { class: "gauge", title: `${fmtInt(sum.cpus_allocated)} of ${fmtInt(sum.cpus_total)} CPUs allocated` },
             el("span", { class: `gauge-bar ${pct >= 90 ? "hot" : ""}` }, el("i", { style: `width:${pct}%` })), `${pct}% CPUs busy`),
-          el("span", { class: "muted" }, `${fmtInt(c.load.nodes_idle)} idle of ${fmtInt(c.load.nodes_total)} nodes · ${fmtInt(c.load.jobs_running)} running · ${fmtInt(c.load.jobs_pending)} queued (all users)`),
+          el("span", { class: "muted" }, `${fmtInt(sum.nodes_idle)} idle of ${fmtInt(sum.nodes_total)} nodes · ${fmtInt(sum.jobs_running)} running · ${fmtInt(sum.jobs_pending)} queued (all users)`),
           el("span", { class: "legend" }, ...["idle", "mixed", "allocated", "unavailable"].map((k) => el("span", { class: k }, k === "unavailable" ? "down/drained" : k))),
         );
       }
+      if (c.filter && c.filter.length) head.append(el("span", { class: "load-filter" }, `partitions: ${c.filter.join(", ")}`));
+      if (c.fetched_at) head.append(el("span", { class: "load-filter" }, `as of ${clock(c.fetched_at)}`));
       box.append(head);
       if (!c.partitions || !c.partitions.length) {
         box.append(el("div", { class: "load-empty" },
-          c.ok ? "no partition data (show_load = false or sinfo unavailable)" : (c.error_kind === "login" ? "not logged in" : `not reached: ${c.error || ""}`)));
+          c.error ? c.error : (l.fetching ? "fetching…" : "no partition data yet")));
         root.append(box);
         continue;
       }
+      if (c.warning) box.append(el("div", { class: "load-empty" }, `⚠ ${c.warning}`));
       const table = el("table", { class: "parts" },
         el("thead", {}, el("tr", {},
           el("th", {}, "Partition"), el("th", {}, "Nodes"), el("th", { class: "num" }, "Free nodes"), el("th", { class: "num" }, "Total"),
@@ -531,7 +581,9 @@
   $("#window").value = String(state.windowHours);
   $("#window").addEventListener("change", (e) => { state.windowHours = Number(e.target.value); savePrefs(); render(); });
   $("#drawer-close").addEventListener("click", closeDrawer);
-  $("#view-toggle").addEventListener("click", toggleView);
+  $("#view-toggle").addEventListener("click", () => (state.view === "load" ? refreshLoad() : enterLoadView()));
+  $("#load-refresh").addEventListener("click", refreshLoad);
+  $("#load-back").addEventListener("click", leaveLoadView);
   $("#tabs").addEventListener("click", (e) => {
     const b = e.target.closest("button[data-tab]");
     if (!b) return;
@@ -549,8 +601,9 @@
     if (e.key === "/") { e.preventDefault(); $("#search").focus(); }
     else if (e.key === "r") requestRefresh();
     else if (e.key === "t") cycleTheme();
-    else if (e.key === "l") toggleView();
-    else if (e.key === "Escape") closeDrawer();
+    else if (e.key === "l") { if (state.view === "load") refreshLoad(); else enterLoadView(); }
+    else if (e.key === "q") leaveLoadView();
+    else if (e.key === "Escape") { if (state.selected) closeDrawer(); else leaveLoadView(); }
     else if ("12345".includes(e.key)) { const b = $$("#tabs button[data-tab]")[Number(e.key) - 1]; if (b) b.click(); }
   });
 

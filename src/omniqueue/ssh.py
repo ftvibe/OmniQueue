@@ -62,6 +62,42 @@ def socket_path(cluster: ClusterConfig, config: Config) -> Path:
     return control_socket_dir(config) / f"cm-{safe}"
 
 
+def _stamp_path(cluster: ClusterConfig, config: Config) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", cluster.name)
+    return control_socket_dir(config) / f"last-{safe}"
+
+
+def touch_last_use(cluster: ClusterConfig, config: Config) -> None:
+    """Record that the master was just used (ControlPersist's idle timer restarts then)."""
+    if cluster.is_local or not config.persist_connections:
+        return
+    try:
+        _stamp_path(cluster, config).write_text(f"{time.time():.0f}\n")
+    except OSError:
+        pass
+
+
+def last_use(cluster: ClusterConfig, config: Config) -> float | None:
+    try:
+        return float(_stamp_path(cluster, config).read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def master_pid(cluster: ClusterConfig, config: Config) -> int | None:
+    """PID of the open master, from `ssh -O check` ("Master running (pid=1234)")."""
+    if cluster.is_local or not config.persist_connections or not socket_path(cluster, config).exists():
+        return None
+    try:
+        proc = subprocess.run(_mux(cluster, config, "check"), capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    m = re.search(r"pid=(\d+)", proc.stderr + proc.stdout)
+    return int(m.group(1)) if m else None
+
+
 def control_options(config: Config, cluster: ClusterConfig | None = None) -> list[str]:
     """ssh options that reuse one master connection per cluster between polls.
 
@@ -134,7 +170,10 @@ def login(cluster: ClusterConfig, config: Config) -> int:
     argv = build_ssh_argv(cluster, "true", config.ssh_timeout, config, batch=False)
     proc = subprocess.Popen(argv)
     try:
-        return proc.wait()
+        rc = proc.wait()
+        if rc == 0:
+            touch_last_use(cluster, config)
+        return rc
     except KeyboardInterrupt:
         proc.terminate()
         try:
@@ -172,6 +211,10 @@ def close_connection(cluster: ClusterConfig, config: Config) -> str:
     if cluster.is_local or not config.persist_connections:
         return "n/a"
     sock = socket_path(cluster, config)
+    try:
+        _stamp_path(cluster, config).unlink()
+    except OSError:
+        pass
     if not sock.exists():
         return "not open"
     try:

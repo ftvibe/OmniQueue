@@ -39,10 +39,19 @@
   <button data-tab="problem" role="tab" class="c-problem">Failed <span class="count"></span></button>
   <button data-tab="ok" role="tab" class="c-ok">Completed <span class="count"></span></button>
   <span class="tabs-spacer"></span>
-  <button id="view-toggle" class="view-toggle" title="switch between your jobs and the cluster load (l)">cluster load <kbd>l</kbd></button>
+  <button id="view-toggle" class="view-toggle" title="cluster load view (l); q returns to your jobs">cluster load <kbd>l</kbd></button>
 </nav>
 
-<section id="load" class="load" hidden aria-label="Cluster load"></section>
+<section id="load" class="load" hidden aria-label="Cluster load">
+  <div class="load-bar">
+    <span id="load-status" class="muted"></span>
+    <span class="load-actions">
+      <button id="load-refresh" title="fetch the cluster load again (l)">↻ refresh load</button>
+      <button id="load-back" title="back to your jobs (q)">← my jobs <kbd>q</kbd></button>
+    </span>
+  </div>
+  <div id="load-clusters"></div>
+</section>
 
 <main id="jobs-view">
   <table id="jobs" class="jobs">
@@ -79,7 +88,7 @@
 
 <footer class="foot">
   <span id="footer-note"></span>
-  <span class="muted">keys: <kbd>/</kbd> search · <kbd>r</kbd> refresh · <kbd>1</kbd>–<kbd>5</kbd> tabs · <kbd>t</kbd> theme · <kbd>l</kbd> load view · <kbd>Esc</kbd> close</span>
+  <span class="muted">keys: <kbd>/</kbd> search · <kbd>r</kbd> refresh · <kbd>1</kbd>–<kbd>5</kbd> tabs · <kbd>t</kbd> theme · <kbd>l</kbd> cluster load · <kbd>q</kbd> back to jobs · <kbd>Esc</kbd> close</span>
 </footer>
 <script src="/app.js"></script>
 </body>

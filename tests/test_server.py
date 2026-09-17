@@ -66,6 +66,29 @@ class ServerTests(unittest.TestCase):
             self.get("/logo/../../etc/passwd")
         self.assertEqual(cm.exception.code, 404)
 
+    def test_load_endpoints(self):
+        status, _, body = self.get("/api/load")
+        self.assertEqual(status, 200)
+        snap = json.loads(body)
+        self.assertEqual({c["name"] for c in snap["clusters"]}, {"tetralith", "dardel", "lumi", "offline-cluster"})
+        self.assertFalse(snap["fetching"])
+        page = self.get("/")[2]
+        token = page.split(b'name="omniqueue-token" content="')[1].split(b'"')[0].decode()
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/load/refresh", method="POST",
+                                     headers={"X-OmniQueue-Token": token})
+        with urllib.request.urlopen(req) as r:
+            self.assertTrue(json.loads(r.read())["ok"])
+        for _ in range(100):  # the demo fetch takes under a second
+            snap = json.loads(self.get("/api/load")[2])
+            if snap["fetched_at"] and not snap["fetching"]:
+                break
+            import time
+            time.sleep(0.05)
+        by = {c["name"]: c for c in snap["clusters"]}
+        self.assertTrue(by["tetralith"]["partitions"])
+        self.assertEqual({p["partition"] for p in by["dardel"]["partitions"]}, {"main", "gpu"})  # load_partitions filter
+        self.assertIn("timed out", by["offline-cluster"]["error"])
+
     def test_404(self):
         with self.assertRaises(urllib.error.HTTPError) as cm:
             self.get("/../pyproject.toml")

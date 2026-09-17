@@ -33,7 +33,8 @@ class ClusterConfig:
     squeue_args: list[str] = field(default_factory=list)
     sacct_args: list[str] = field(default_factory=list)
     use_sacct: bool = True
-    show_load: bool = True  # also fetch sinfo + an all-users squeue for the cluster load view
+    show_load: bool = True  # include this cluster in the load view (sinfo + all-users squeue, on demand)
+    load_partitions: list[str] = field(default_factory=list)  # only these partitions in the load view; [] = all
     enabled: bool = True
     color: str | None = None  # optional accent colour for the dashboard
     logo: str | None = None  # image file path or http(s) URL shown on the cluster card
@@ -120,7 +121,8 @@ host = "tetralith"               # ssh alias
 # squeue_args = ["--partition=main"]
 # sacct_args  = ["--account=naiss2024-1-23"]
 # use_sacct = true               # set false on clusters without job accounting
-# show_load = true               # sinfo + all-users squeue for the load view (l); false to skip
+# show_load = true               # include in the load view (l); false to leave this cluster out
+# load_partitions = ["main", "gpu"]   # only these partitions in the load view; omit for all
 # color = "#5f9e99"
 # logo = "~/Pictures/nsc.png"    # or drop <name>.png/.svg into ~/.config/omniqueue/logos/
 
@@ -234,7 +236,7 @@ def config_from_dict(raw: dict) -> Config:
         if unknown:
             raise ConfigError(f"clusters[{i}] ({c['name']}): unknown keys {sorted(unknown)}")
         validate_ssh_options(c.get("ssh_options", []), f"clusters[{i}] ({c['name']}).ssh_options")
-        for key in ("squeue_args", "sacct_args"):
+        for key in ("squeue_args", "sacct_args", "load_partitions"):
             for arg in c.get(key, []):
                 if not isinstance(arg, str) or not _SAFE_VALUE.match(arg):
                     raise ConfigError(f"clusters[{i}] ({c['name']}).{key}: {arg!r} contains characters that are not allowed.")

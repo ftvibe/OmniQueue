@@ -1,6 +1,7 @@
 import os
 import stat
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -99,10 +100,13 @@ class LocalClusterEndToEnd(unittest.TestCase):
         status = snap["clusters"][0]
         self.assertTrue(status["ok"], status)
         self.assertIsNone(status["warning"])
-        self.assertEqual(len(status["partitions"]), 1)
-        self.assertEqual(status["partitions"][0]["nodes"]["idle"], 3)
-        self.assertEqual(status["partitions"][0]["jobs"], {"running": 1, "pending": 1})
-        self.assertEqual(status["load"]["nodes_total"], 13)
+        self.assertNotIn("partitions", status)  # load is fetched on demand, not with the poll
+        col.fetch_load()
+        rec = {c["name"]: c for c in col.load_snapshot()["clusters"]}["here"]
+        self.assertEqual(len(rec["partitions"]), 1)
+        self.assertEqual(rec["partitions"][0]["nodes"]["idle"], 3)
+        self.assertEqual(rec["partitions"][0]["jobs"], {"running": 1, "pending": 1})
+        self.assertEqual(rec["summary"]["nodes_total"], 13)
         self.assertEqual(status["counts"], {"running": 1, "pending": 2, "ok": 1, "problem": 4, "unknown": 0})
         self.assertEqual(len(snap["jobs"]), 8)
 
@@ -194,6 +198,35 @@ class LoginGateTests(unittest.TestCase):
                                    return_value=CommandResult("@@OMNIQUEUE squeue rc=0\n@@OMNIQUEUE sacct rc=0\n", "", 0)) as run:
                 col.refresh()
                 run.assert_called_once()
+
+
+class ActiveTests(unittest.TestCase):
+    def test_active_listing(self):
+        import io
+        from contextlib import redirect_stdout
+
+        from omniqueue import cli as cli_mod
+        from omniqueue import ssh as ssh_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Config(clusters=[ClusterConfig(name="a", host="a.example"), ClusterConfig(name="b", host="b.example")],
+                         data_dir=Path(tmp), persist_seconds=7200)
+            ssh_mod.touch_last_use(cfg.clusters[0], cfg)
+            self.assertAlmostEqual(ssh_mod.last_use(cfg.clusters[0], cfg), time.time(), delta=5)
+            with mock.patch.object(cli_mod, "load_config", return_value=cfg), \
+                 mock.patch.object(cli_mod, "connection_alive", side_effect=lambda c, _: c.name == "a"), \
+                 mock.patch.object(cli_mod, "master_pid", return_value=4242):
+                out = io.StringIO()
+                with redirect_stdout(out):
+                    self.assertEqual(cli_mod.main(["--config", str(Path(tmp) / "x.toml"), "active"]), 0)
+            text = out.getvalue()
+            self.assertRegex(text, r"a\s+a.example\s+open\s+4242\s+\d\d:\d\d:\d\d\s+01:59:5\d")
+            self.assertRegex(text, r"b\s+b.example\s+closed")
+            self.assertIn("1 open", text)
+            # logout removes the stamp
+            with mock.patch.object(ssh_mod.subprocess, "run"), mock.patch.object(ssh_mod.time, "sleep"):
+                ssh_mod.close_connection(cfg.clusters[0], cfg)
+            self.assertIsNone(ssh_mod.last_use(cfg.clusters[0], cfg))
 
 
 class CloseConnectionTests(unittest.TestCase):

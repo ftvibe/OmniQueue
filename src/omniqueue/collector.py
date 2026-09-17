@@ -12,8 +12,8 @@ from typing import Any
 from .config import ClusterConfig, Config
 from .history import HistoryStore
 from .models import Job
-from .slurm import combined_command, merge_jobs, parse_load, parse_sacct, parse_squeue, split_combined_output, summarize_load
-from .ssh import RemoteError, close_connection, connection_alive, run_on_cluster
+from .slurm import combined_command, load_command, merge_jobs, parse_load, parse_sacct, parse_squeue, split_combined_output, summarize_load
+from .ssh import RemoteError, close_connection, connection_alive, run_on_cluster, touch_last_use
 
 log = logging.getLogger("omniqueue.collector")
 
@@ -33,8 +33,6 @@ class ClusterStatus:
     color: str | None = None
     logo: str | None = None  # URL the dashboard can load
     counts: dict[str, int] = field(default_factory=dict)
-    partitions: list[dict] = field(default_factory=list)  # cluster load per partition
-    load: dict | None = None  # whole-cluster summary
 
     def to_dict(self) -> dict[str, Any]:
         return self.__dict__.copy()
@@ -58,6 +56,11 @@ class Collector:
         self.refreshing = False
         self._conn_cache: dict[str, tuple[float, bool]] = {}
         self.conn_cache_seconds = 10.0
+        # cluster load view: fetched on demand, never as part of the regular poll
+        self._load: dict[str, dict[str, Any]] = {}
+        self._load_lock = threading.Lock()
+        self.load_fetching = False
+        self.load_fetched_at: float | None = None
 
     def _needs_login(self, cluster: ClusterConfig) -> bool:
         if cluster.is_local or not self.config.persist_connections or self.config.connect_on_poll:
@@ -112,7 +115,7 @@ class Collector:
         warnings: list[str] = []
         try:
             cmd = combined_command(cluster.user, self.config.lookback_hours, cluster.squeue_args,
-                                   cluster.sacct_args, cluster.use_sacct, load=cluster.show_load)
+                                   cluster.sacct_args, cluster.use_sacct)
             res = run_on_cluster(cluster, cmd, self.config.ssh_timeout, self.config)
             sections = split_combined_output(res.stdout)
             stderr = res.stderr.strip()
@@ -132,15 +135,6 @@ class Collector:
                     sacct_jobs = parse_sacct(sa_out, cluster.name)
             elif stderr:
                 warnings.append(stderr[:200])
-
-            if cluster.show_load:
-                si_out, si_rc = sections.get("sinfo", ("", -1))
-                sq_all_out, sq_all_rc = sections.get("squeue_all", ("", -1))
-                if si_rc != 0:
-                    warnings.append(f"sinfo exited {si_rc}: no load view")
-                else:
-                    status.partitions = parse_load(si_out, sq_all_out if sq_all_rc == 0 else "")
-                    status.load = summarize_load(status.partitions)
         except RemoteError as exc:
             status.ok = False
             status.error = str(exc)
@@ -162,10 +156,80 @@ class Collector:
         status.failures = 0
         if not cluster.is_local and self.config.persist_connections:
             self._conn_cache[cluster.name] = (time.time(), True)
+            touch_last_use(cluster, self.config)
         status.warning = "; ".join(warnings) or None
         status.last_success = time.time()
         status.poll_seconds = time.monotonic() - t0
         return jobs, status
+
+    # -- cluster load (on demand) --------------------------------------------------
+    def fetch_load_cluster(self, cluster: ClusterConfig) -> dict[str, Any]:
+        rec: dict[str, Any] = {"name": cluster.name, "partitions": [], "summary": None, "error": None,
+                               "fetched_at": time.time(), "filter": list(cluster.load_partitions)}
+        if not cluster.show_load:
+            rec["error"] = "left out of the load view (show_load = false)"
+            return rec
+        if self._needs_login(cluster):
+            rec["error"] = "not logged in"
+            return rec
+        try:
+            res = run_on_cluster(cluster, load_command(cluster.load_partitions or None), self.config.ssh_timeout, self.config)
+        except RemoteError as exc:
+            rec["error"] = str(exc)
+            return rec
+        sections = split_combined_output(res.stdout)
+        si_out, si_rc = sections.get("sinfo", ("", -1))
+        sq_out, sq_rc = sections.get("squeue_all", ("", -1))
+        if si_rc != 0:
+            rec["error"] = f"sinfo exited {si_rc}: {res.stderr.strip()[:200]}"
+            return rec
+        rec["partitions"] = parse_load(si_out, sq_out if sq_rc == 0 else "")
+        rec["summary"] = summarize_load(rec["partitions"])
+        touch_last_use(cluster, self.config)
+        if sq_rc != 0:
+            rec["warning"] = f"squeue (all users) exited {sq_rc}: queue columns are empty"
+        return rec
+
+    def fetch_load(self) -> None:
+        """Fetch the load of every enabled cluster in parallel (blocking)."""
+        clusters = self.config.enabled_clusters
+        if not clusters:
+            return
+        self.load_fetching = True
+        try:
+            with ThreadPoolExecutor(max_workers=min(16, len(clusters))) as pool:
+                results = list(pool.map(self.fetch_load_cluster, clusters))
+        finally:
+            self.load_fetching = False
+        with self._load_lock:
+            for rec in results:
+                self._load[rec["name"]] = rec
+            self.load_fetched_at = time.time()
+
+    def request_load(self) -> bool:
+        """Start a load fetch in the background; False if one is already running."""
+        if self.load_fetching:
+            return False
+        threading.Thread(target=self._safe_fetch_load, name="omniqueue-load", daemon=True).start()
+        return True
+
+    def _safe_fetch_load(self) -> None:
+        try:
+            self.fetch_load()
+        except Exception:  # noqa: BLE001
+            log.exception("load fetch failed")
+            self.load_fetching = False
+
+    def load_snapshot(self) -> dict[str, Any]:
+        with self._load_lock:
+            clusters = [self._load.get(c.name, {"name": c.name, "partitions": [], "summary": None, "error": None,
+                                                  "fetched_at": None, "filter": list(c.load_partitions)})
+                        for c in self.config.enabled_clusters]
+        for c in clusters:
+            st = self._status.get(c["name"])
+            c["color"] = st.color if st else None
+            c["logo"] = st.logo if st else None
+        return {"now": time.time(), "fetching": self.load_fetching, "fetched_at": self.load_fetched_at, "clusters": clusters}
 
     # -- all clusters ------------------------------------------------------------
     def refresh(self) -> None:

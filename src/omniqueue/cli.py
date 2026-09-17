@@ -17,7 +17,7 @@ from .history import HistoryStore
 from .models import Job
 from .server import make_server
 from .slurm import describe_exit
-from .ssh import close_connection, connection_alive, login
+from .ssh import close_connection, connection_alive, last_use, login, master_pid
 
 
 def fmt_duration(seconds: int | None) -> str:
@@ -134,6 +134,36 @@ def cmd_login(args) -> int:
     return rc
 
 
+def cmd_active(args) -> int:
+    """List the ssh connections OmniQueue holds and how long they will stay open."""
+    cfg = _load(args)
+    if not cfg.persist_connections:
+        print("persist_connections = false: no connections are kept between polls.")
+        return 0
+    now = time.time()
+    print(f"{'CLUSTER':<16} {'HOST':<28} {'STATE':<10} {'PID':>7}  {'LAST USED':<10} CLOSES IN")
+    open_count = 0
+    for c in cfg.enabled_clusters:
+        if c.is_local:
+            print(f"{c.name:<16} {'local':<28} {'n/a':<10} {'':>7}  {'':<10} -")
+            continue
+        alive = connection_alive(c, cfg)
+        pid = master_pid(c, cfg) if alive else None
+        used = last_use(c, cfg)
+        if alive:
+            open_count += 1
+            remaining = None if used is None else cfg.persist_seconds - (now - used)
+            closes = "unknown" if remaining is None else ("any moment" if remaining <= 0 else fmt_duration(remaining))
+            used_txt = time.strftime("%H:%M:%S", time.localtime(used)) if used else "?"
+            print(f"{c.name:<16} {(c.host or ''):<28} {'open':<10} {pid or '':>7}  {used_txt:<10} {closes}")
+        else:
+            print(f"{c.name:<16} {(c.host or ''):<28} {'closed':<10} {'':>7}  {'':<10} -")
+    hours = cfg.persist_seconds / 3600
+    print(f"\n{open_count} open. Idle connections close {hours:g} h after their last use (persist_seconds); "
+          "each poll counts as use while `monitor` runs. `omniqueue logout` closes them now.")
+    return 0
+
+
 def cmd_completion(args) -> int:
     from .completion import script
 
@@ -214,7 +244,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-v", "--verbose", action="store_true", help="debug logging")
     p.add_argument("--version", action="version", version=f"omniqueue {__version__}")
     sub = p.add_subparsers(dest="command", required=True,
-                           metavar="{init,monitor,serve,login,logout,list,check,completion}")
+                           metavar="{init,monitor,serve,login,active,logout,list,check,completion}")
 
     s = sub.add_parser("init", help="write an example config file")
     s.add_argument("--force", action="store_true", help="overwrite an existing config")
@@ -238,6 +268,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--force", action="store_true", help="reconnect even if a connection is already open")
     s.add_argument("--close", action="store_true", help="close the persistent connection(s) instead")
     s.set_defaults(func=cmd_login)
+
+    s = sub.add_parser("active", help="show the open ssh connections and how long they will stay open")
+    s.set_defaults(func=cmd_active)
 
     s = sub.add_parser("logout", help="close the persistent ssh connection(s)")
     s.add_argument("cluster", nargs="*", help="only these clusters (default: all)")

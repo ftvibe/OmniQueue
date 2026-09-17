@@ -1,6 +1,6 @@
 import unittest
 
-from omniqueue.slurm import combined_command, parse_load, summarize_load
+from omniqueue.slurm import combined_command, load_command, parse_load, summarize_load
 
 SINFO = """\
 main*|up|1500|allocated|48000/0/0/48000|3-00:00:00
@@ -52,12 +52,58 @@ class LoadParsing(unittest.TestCase):
     def test_garbage_tolerated(self):
         self.assertEqual(parse_load("slurm_load_partitions: error\n", "nonsense"), [])
 
-    def test_combined_command_includes_load(self):
-        cmd = combined_command("me", 24, None, None, use_sacct=True, load=True)
+    def test_load_command_is_separate_and_filters_partitions(self):
+        self.assertNotIn("sinfo", combined_command("me", 24, None, None, use_sacct=True))  # not in the poll
+        cmd = load_command()
         self.assertIn("sinfo --noheader", cmd)
         self.assertIn("--states=RUNNING,PENDING", cmd)
-        self.assertEqual(cmd.count("@@OMNIQUEUE"), 4)
-        self.assertNotIn("sinfo", combined_command("me", 24, None, None, use_sacct=True, load=False))
+        self.assertEqual(cmd.count("@@OMNIQUEUE"), 2)
+        self.assertNotIn("--partition", cmd)
+        cmd = load_command(["main", "gpu"])
+        self.assertEqual(cmd.count("--partition=main,gpu"), 2)
+
+
+class OnDemandLoad(unittest.TestCase):
+    def test_fetch_load_uses_login_gate_and_filter(self):
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+
+        from omniqueue import collector as collector_mod
+        from omniqueue.collector import Collector
+        from omniqueue.config import ClusterConfig, Config
+        from omniqueue.history import HistoryStore
+        from omniqueue.ssh import CommandResult
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Config(clusters=[ClusterConfig(name="a", host="a", load_partitions=["main"]),
+                                   ClusterConfig(name="b", host="b", show_load=False)], data_dir=Path(tmp))
+            col = Collector(cfg, HistoryStore(Path(tmp) / "h.json"))
+            out = SINFO + "@@OMNIQUEUE sinfo rc=0\n" + SQUEUE_ALL + "@@OMNIQUEUE squeue_all rc=0\n"
+            with mock.patch.object(collector_mod, "connection_alive", return_value=True), \
+                 mock.patch.object(collector_mod, "run_on_cluster", return_value=CommandResult(out, "", 0)) as run:
+                col.fetch_load()
+            self.assertEqual(run.call_count, 1)  # cluster b is left out
+            self.assertIn("--partition=main", run.call_args[0][1])
+            snap = col.load_snapshot()
+            by = {c["name"]: c for c in snap["clusters"]}
+            self.assertEqual(len(by["a"]["partitions"]), 3)
+            self.assertEqual(by["a"]["filter"], ["main"])
+            self.assertIn("show_load", by["b"]["error"])
+            self.assertIsNotNone(snap["fetched_at"])
+            # the regular poll must not touch sinfo
+            with mock.patch.object(collector_mod, "connection_alive", return_value=True), \
+                 mock.patch.object(collector_mod, "run_on_cluster",
+                                   return_value=CommandResult("@@OMNIQUEUE squeue rc=0\n@@OMNIQUEUE sacct rc=0\n", "", 0)) as run:
+                col.refresh()
+            for call in run.call_args_list:
+                self.assertNotIn("sinfo", call[0][1])
+            # not logged in -> no ssh, explained in the record
+            with mock.patch.object(collector_mod, "connection_alive", return_value=False), \
+                 mock.patch.object(collector_mod, "run_on_cluster") as run:
+                col.fetch_load()
+                run.assert_not_called()
+            self.assertEqual({c["name"]: c for c in col.load_snapshot()["clusters"]}["a"]["error"], "not logged in")
 
 
 if __name__ == "__main__":

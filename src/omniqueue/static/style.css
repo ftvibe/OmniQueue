@@ -113,7 +113,11 @@ main { padding: 0 20px 24px; overflow-x: auto; }
 .tabs button.view-toggle kbd { margin-left: 4px; }
 
 /* ---- cluster load view ---- */
-.load { padding: 16px 20px 24px; display: grid; gap: 16px; }
+.load { padding: 12px 20px 24px; }
+.load-bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; font-size: 13px; }
+.load-actions { display: flex; gap: 8px; }
+#load-clusters { display: grid; gap: 16px; }
+.load-filter { color: var(--muted); font-size: 12px; }
 .load-cluster { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--card-color, var(--border)); border-radius: 8px; box-shadow: var(--shadow); overflow: hidden; }
 .load-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
 .load-head b { font-size: 15px; }

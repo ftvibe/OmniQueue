@@ -11,6 +11,7 @@ COMMANDS = {
     "monitor": "start polling and open the dashboard",
     "serve": "start polling without opening a browser",
     "login": "open the persistent ssh connections",
+    "active": "show open ssh connections and their remaining time",
     "logout": "close the persistent ssh connections",
     "list": "poll once and print a job table",
     "check": "test the connection to every cluster",
@@ -27,7 +28,7 @@ _omniqueue() {
   for ((i = 1; i < COMP_CWORD; i++)); do
     case "${COMP_WORDS[i]}" in
       -c|--config) cfg="--config ${COMP_WORDS[i+1]}"; ((i++)) ;;
-      init|monitor|serve|login|logout|list|check|completion) cmd="${COMP_WORDS[i]}"; break ;;
+      init|monitor|serve|login|active|logout|list|check|completion) cmd="${COMP_WORDS[i]}"; break ;;
     esac
   done
   if [[ "$prev" == "-c" || "$prev" == "--config" ]]; then

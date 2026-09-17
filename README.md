@@ -92,6 +92,7 @@ Open the connections:
 ```sh
 omniqueue login            # all clusters that are not connected yet
 omniqueue login dardel     # just one
+omniqueue active           # which connections are open, and for how much longer
 omniqueue logout           # close all connections now
 omniqueue logout dardel    # close one
 ```
@@ -137,6 +138,7 @@ network change that dropped the connection.
 | `omniqueue monitor [--port N]` | poll all clusters in the background, serve the dashboard and open it |
 | `omniqueue serve [--open]` | the same without opening a browser (for a headless machine) |
 | `omniqueue login [CLUSTER...]` | open the persistent ssh connection, allowing password / 2FA |
+| `omniqueue active` | list the open ssh connections, their PIDs, last use and when they close |
 | `omniqueue logout [CLUSTER...]` | close the persistent ssh connection(s) now |
 | `omniqueue login --force CLUSTER` | reconnect a cluster whose connection is stale |
 | `omniqueue list [--state running] ...` | poll once and print a table to the terminal |
@@ -180,21 +182,25 @@ cluster names from your config, `list --state` the job states.
   limit used. The bar turns coral past 90 %.
 * **Failed jobs** carry a note such as `exit code 1`, `hit time limit`,
   `out of memory` or `cancelled by uid 1234`.
-* **Cluster load** (`l` or the button at the right of the tabs) swaps your jobs
-  for a view of each cluster: CPU utilisation, and per partition the node
+* **Cluster load** (`l`, or the button at the right of the tabs) swaps your
+  jobs for a view of each cluster: CPU utilisation, and per partition the node
   states as a bar (idle / mixed / allocated / down), free nodes and CPUs, the
   time limit, and the queue pressure from *all* users: running jobs, queued
   jobs and how many nodes they are asking for. Free nodes in bold means you
   can probably start right away; a queue with nodes wanted and no free nodes
-  means a wait. It comes from `sinfo` and an all-users `squeue` in the same
-  poll (`show_load = false` per cluster to skip it).
+  means a wait. `q` (or Esc) returns to your jobs.
+  The load is fetched **on demand only**: when you enter the view, when you
+  press `l` again, or with its refresh button. The regular poll never runs
+  `sinfo`. Per cluster, `load_partitions = ["main", "gpu"]` limits the view
+  to the partitions you care about and `show_load = false` leaves the cluster
+  out.
 * Pending jobs show Slurm's estimated start time in the note when the
   scheduler has computed one.
 * Click a row for all details (queue wait, node list, work dir, exit code, ...).
   Finished jobs can be removed from the local history from there.
 * Muted teal / coral / mustard palette, dark and light; failed and done never
   rely on a red-green pair. The ◐ button (or `t`) cycles auto / dark / light.
-* Keys: `/` search, `r` refresh now, `l` cluster load, `t` theme, `1`-`5` tabs, `Esc` close.
+* Keys: `/` search, `r` refresh now, `l` cluster load (again: refetch), `q` back to jobs, `t` theme, `1`-`5` tabs, `Esc` close.
 
 Only the dashboard's own machine can reach it (`listen_host = "127.0.0.1"`).
 If you run OmniQueue on a remote machine, forward the port with
@@ -248,12 +254,15 @@ Per poll and per cluster, OmniQueue runs one remote shell command:
 
 ```
 squeue --noheader --array --user="$USER" --format='%i|%T|...|%j'; echo "@@OMNIQUEUE squeue rc=$?"; \
-sacct  --noheader --parsable2 --allocations --user="$USER" --starttime=<now - lookback> --format=JobID,State,...,JobName; echo "@@OMNIQUEUE sacct rc=$?"; \
-sinfo  --noheader --format='%P|%a|%D|%T|%C|%l'; echo "@@OMNIQUEUE sinfo rc=$?"; \
-squeue --noheader --states=RUNNING,PENDING --format='%P|%T|%D|%C'; echo "@@OMNIQUEUE squeue_all rc=$?"
+sacct  --noheader --parsable2 --allocations --user="$USER" --starttime=<now - lookback> --format=JobID,State,...,JobName; echo "@@OMNIQUEUE sacct rc=$?"
 ```
 
-The last two feed the cluster load view and are skipped with `show_load = false`.
+The cluster load view, only when you ask for it, runs separately:
+
+```
+sinfo  --noheader --format='%P|%a|%D|%T|%C|%l' [--partition=main,gpu]; echo "@@OMNIQUEUE sinfo rc=$?"; \
+squeue --noheader --states=RUNNING,PENDING --format='%P|%T|%D|%C' [--partition=main,gpu]; echo "@@OMNIQUEUE squeue_all rc=$?"
+```
 
 `squeue` is authoritative for anything it lists; `sacct` supplies finished jobs
 and their exit codes. Everything is merged into a JSON history file in

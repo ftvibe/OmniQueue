@@ -92,6 +92,22 @@ class DemoCollector(Collector):
     def connected(self, cluster: ClusterConfig) -> bool | None:
         return cluster.name != "offline-cluster"
 
+    def fetch_load_cluster(self, cluster: ClusterConfig) -> dict:
+        from .slurm import summarize_load
+
+        time.sleep(self._rng.uniform(0.2, 0.8))
+        rec = {"name": cluster.name, "partitions": [], "summary": None, "error": None,
+               "fetched_at": time.time(), "filter": list(cluster.load_partitions)}
+        if cluster.name == "offline-cluster":
+            rec["error"] = "ssh failed: connect to host unreachable.example.org port 22: Connection timed out"
+            return rec
+        parts = make_demo_load(cluster.name, self._rng)
+        if cluster.load_partitions:
+            parts = [p for p in parts if p["partition"] in cluster.load_partitions]
+        rec["partitions"] = parts
+        rec["summary"] = summarize_load(parts)
+        return rec
+
     def poll_cluster(self, cluster: ClusterConfig) -> tuple[list[Job], ClusterStatus]:
         status = self._status[cluster.name]
         status.last_attempt = time.time()
@@ -103,10 +119,6 @@ class DemoCollector(Collector):
             status.failures += 1
             return [], status
         jobs = make_demo_jobs(cluster.name, self._rng)
-        status.partitions = make_demo_load(cluster.name, self._rng)
-        from .slurm import summarize_load
-
-        status.load = summarize_load(status.partitions)
         status.ok = True
         status.error = None
         status.last_success = time.time()
@@ -128,7 +140,7 @@ def demo_config() -> Config:
         logo_dir=logo_dir,
         clusters=[
             ClusterConfig(name="tetralith", host="tetralith.nsc.liu.se", color="#5f9e99"),
-            ClusterConfig(name="dardel", host="dardel.pdc.kth.se", color="#e2856c"),
+            ClusterConfig(name="dardel", host="dardel.pdc.kth.se", color="#e2856c", load_partitions=["main", "gpu"]),
             ClusterConfig(name="lumi", host="lumi.csc.fi", color="#b39a4b"),
             ClusterConfig(name="offline-cluster", host="unreachable.example.org", color="#8fb8b4"),
         ],

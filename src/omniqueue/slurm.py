@@ -91,28 +91,35 @@ SINFO_FIELDS = "%P|%a|%D|%T|%C|%l"  # partition, avail, nodes, state, cpus A/I/O
 SQUEUE_ALL_FIELDS = "%P|%T|%D|%C"  # partition, state, nodes, cpus (every user)
 
 
-def sinfo_command() -> str:
-    return f"sinfo --noheader --format={shlex.quote(SINFO_FIELDS)}"
+def _partition_arg(partitions: list[str] | None) -> str:
+    return f" --partition={shlex.quote(','.join(partitions))}" if partitions else ""
 
 
-def squeue_all_command() -> str:
-    return f"squeue --noheader --states=RUNNING,PENDING --format={shlex.quote(SQUEUE_ALL_FIELDS)}"
+def sinfo_command(partitions: list[str] | None = None) -> str:
+    return f"sinfo --noheader --format={shlex.quote(SINFO_FIELDS)}{_partition_arg(partitions)}"
+
+
+def squeue_all_command(partitions: list[str] | None = None) -> str:
+    return (f"squeue --noheader --states=RUNNING,PENDING --format={shlex.quote(SQUEUE_ALL_FIELDS)}"
+            f"{_partition_arg(partitions)}")
 
 
 def combined_command(user: str | None, lookback_hours: int, squeue_args: list[str] | None,
-                     sacct_args: list[str] | None, use_sacct: bool, load: bool = False) -> str:
-    """squeue and sacct (and, with load=True, sinfo plus an all-users squeue) in one
-    remote shell invocation, so a poll costs one ssh round trip.
+                     sacct_args: list[str] | None, use_sacct: bool) -> str:
+    """squeue and sacct in one remote shell invocation, so a poll costs one ssh round trip.
 
     Each command is followed by a marker line carrying its exit status.
     """
     parts = [squeue_command(user, squeue_args), f'echo "{MARK} squeue rc=$?"']
     if use_sacct:
         parts += [sacct_command(user, lookback_hours, sacct_args), f'echo "{MARK} sacct rc=$?"']
-    if load:
-        parts += [sinfo_command(), f'echo "{MARK} sinfo rc=$?"',
-                  squeue_all_command(), f'echo "{MARK} squeue_all rc=$?"']
     return "; ".join(parts)
+
+
+def load_command(partitions: list[str] | None = None) -> str:
+    """sinfo plus an all-users squeue, fetched on demand for the cluster load view."""
+    return "; ".join([sinfo_command(partitions), f'echo "{MARK} sinfo rc=$?"',
+                      squeue_all_command(partitions), f'echo "{MARK} squeue_all rc=$?"'])
 
 
 # sinfo node states -> the four buckets the dashboard shows

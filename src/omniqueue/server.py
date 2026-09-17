@@ -91,6 +91,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/state":
             self._json(self.collector.snapshot())
             return
+        if path == "/api/load":
+            self._json(self.collector.load_snapshot())
+            return
         if path == "/api/health":
             self._json({"ok": True})
             return
@@ -143,6 +146,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/refresh":
             self.collector.request_refresh()
             self._json({"ok": True, "refreshing": True})
+            return
+        if path == "/api/load/refresh":
+            started = self.collector.request_load()
+            self._json({"ok": True, "started": started})
             return
         if path.startswith("/api/forget/"):
             key = path[len("/api/forget/"):]
