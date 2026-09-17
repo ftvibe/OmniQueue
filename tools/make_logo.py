@@ -67,14 +67,14 @@ for y, hw in PROFILE.items():
 
 # ---- arms (asymmetric like a real one) --------------------------------------------------
 ARMS = [
-    [(19, 26), (12, 22), (7, 16), (5, 10), (6, 5)],                 # up-left, sweeps up and curls
-    [(30, 25), (37, 20), (42, 14), (44, 8)],                        # up-right, long straight reach
-    [(18, 30), (11, 33), (5, 31), (2, 26), (2, 21)],                # left, dips then hooks up
-    [(31, 30), (38, 31), (44, 29), (46, 24)],                       # right, shorter hook
-    [(20, 32), (14, 35), (8, 38), (3, 43)],                         # down-left outer, long sweep
-    [(28, 32), (33, 38), (38, 43), (44, 45)],                       # down-right outer, trails away
-    [(22, 33), (22, 38), (18, 43), (13, 45)],                       # down-left inner, kinks outward
-    [(26, 33), (28, 39), (28, 44), (31, 46)],                       # down-right inner, curls out
+    [(19, 26), (12, 21), (8, 14), (7, 8), (9, 4)],             # up-left, curls in at the top
+    [(30, 25), (36, 19), (40, 11), (41, 4)],                    # up-right, raised high
+    [(18, 30), (10, 31), (4, 28), (3, 21)],                     # left, hooks up
+    [(31, 30), (39, 32), (44, 29), (45, 22)],                   # right, hooks up
+    [(20, 32), (13, 37), (7, 42), (3, 44)],                     # down-left outer
+    [(28, 32), (35, 37), (41, 42), (45, 44)],                   # down-right outer
+    [(22, 33), (21, 39), (19, 43), (17, 45)],                   # down-left inner
+    [(26, 33), (28, 39), (30, 43), (32, 45)],                   # down-right inner
 ]
 for pts in ARMS:
     arm(pts, 5, 3)
