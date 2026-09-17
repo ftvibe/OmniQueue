@@ -100,14 +100,14 @@ for y in range(24, 40):
 # (controls..., curl centre, turns, clockwise)
 ARMS = [
     # (controls..., ball centre, turns, clockwise, gap). turns = 0 -> no curl, the ball sits at the tip
-    ([(23, 34), (15, 29), (9, 21), (8, 14)], (9, 8), 1.0, True, 1.0),        # up-left: curls
+    ([(23, 34), (15, 29), (9, 21), (7, 14)], (5, 10), 0.3, True, 1.4),       # up-left: gentle bend at the tip
     ([(33, 33), (40, 27), (45, 19), (47, 12)], (49, 8), 0, False, 0),        # up-right: straight reach
     ([(21, 37), (12, 38), (5, 35), (2, 30)], (2, 26), 0, True, 0),           # left: straight, tip lifts
-    ([(35, 37), (43, 38), (50, 34), (53, 28)], (50, 23), 0.6, False, 1.2),   # right: hook
-    ([(22, 39), (15, 44), (9, 49), (4, 51)], (5, 46), 0.95, False, 1.0),     # down-left outer: curls
+    ([(35, 37), (43, 38), (50, 34), (53, 28)], (51, 24), 0.35, False, 1.4),  # right: soft hook
+    ([(22, 39), (15, 44), (9, 49), (4, 52)], (2, 55), 0, False, 0),          # down-left outer: long sweep
     ([(34, 39), (41, 44), (47, 48), (51, 51)], (54, 53), 0, True, 0),        # down-right outer: trails straight
     ([(26, 40), (24, 46), (20, 51), (15, 54)], (12, 56), 0, True, 0),        # down-left inner: straight
-    ([(30, 40), (32, 46), (33, 51), (31, 54)], (28, 52), 0.5, False, 1.2),   # down-right inner: hooks under
+    ([(30, 40), (32, 46), (33, 51), (31, 54)], (29, 53), 0.3, False, 1.4),   # down-right inner: soft hook under
 ]
 for controls, centre, turns, cw, gap in ARMS:
     body = catmull_rom(controls)

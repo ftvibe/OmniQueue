@@ -93,6 +93,9 @@ def cmd_serve(args) -> int:
     finally:
         collector.stop()
         server.server_close()
+    if cfg.persist_connections and not getattr(args, "demo", False):
+        hours = cfg.persist_seconds / 3600
+        print(f"ssh connections stay open for up to {hours:g} h; run `omniqueue logout` to close them now")
     return 0
 
 
@@ -210,6 +213,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--force", action="store_true", help="reconnect even if a connection is already open")
     s.add_argument("--close", action="store_true", help="close the persistent connection(s) instead")
     s.set_defaults(func=cmd_login)
+
+    s = sub.add_parser("logout", help="close the persistent ssh connection(s)")
+    s.add_argument("cluster", nargs="*", help="only these clusters (default: all)")
+    s.set_defaults(func=cmd_login, close=True, force=False)
 
     s = sub.add_parser("list", help="poll once and print a table to the terminal")
     s.add_argument("--state", "-s", action="append",
