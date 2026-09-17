@@ -1,29 +1,36 @@
 import unittest
 
-from omniqueue.slurm import combined_command, load_command, parse_load, summarize_load
+from omniqueue.slurm import array_task_count, combined_command, load_command, parse_load, summarize_load
 
 SINFO = """\
-main*|up|1500|allocated|48000/0/0/48000|3-00:00:00|2:16:1
-main*|up|120|idle|0/3840/0/3840|3-00:00:00|2:16:1
-main*|up|40|mixed|640/640/0/1280|3-00:00:00|2:16:1
-main*|up|12|drained|0/0/384/384|3-00:00:00|2:16:1
-main*|up|3|down*|0/0/96/96|3-00:00:00|2:16:1
-gpu|up|30|allocated|3840/0/0/3840|1-00:00:00|2:64:1
-gpu|up|2|idle|0/256/0/256|1-00:00:00|2:64:1
-debug|down|4|idle|0/128/0/128|30:00|2:16:1
+main*|up|1500|allocated|48000/0/0/48000|3-00:00:00|2:16:1|32
+main*|up|120|idle|0/3840/0/3840|3-00:00:00|2:16:1|32
+main*|up|40|mixed|640/640/0/1280|3-00:00:00|2:16:1|32
+main*|up|12|drained|0/0/384/384|3-00:00:00|2:16:1|32
+main*|up|3|down*|0/0/96/96|3-00:00:00|2:16:1|32
+gpu|up|30|allocated|3840/0/0/3840|1-00:00:00|2:64:1|128
+gpu|up|2|idle|0/256/0/256|1-00:00:00|2:64:1|128
+debug|down|4|idle|0/128/0/128|30:00|2:16:1|32
 """
 # LUMI-style: Slurm counts two hardware threads per core
 SINFO_THREADS = """\
-small|up|2|idle|0/512/0/512|3-00:00:00|2:64:2
-small|up|4|mixed|124/900/0/1024|3-00:00:00|2:64:2
+small|up|2|idle|0/512/0/512|3-00:00:00|2:64:2|256
+small|up|4|mixed|124/900/0/1024|3-00:00:00|2:64:2|256
 """
 SQUEUE_ALL = """\
-main|RUNNING|4|128
-main|RUNNING|1|32
-main|PENDING|8|256
-main|PENDING|2|64
-gpu|PENDING|1|128
-main,gpu|PENDING|1|32
+1001|main|RUNNING|4|128
+1002|main|RUNNING|1|32
+1003|main|PENDING|8|256
+1004|main|PENDING|2|64
+1005|gpu|PENDING|1|128
+1006|main,gpu|PENDING|1|32
+"""
+# arrays and task-only requests, which squeue under-reports
+SQUEUE_TRICKY = """\
+2001_[1-100]|main|PENDING|1|32
+2002|main|PENDING|1|512
+2003_[1-10,20-25%4]|main|PENDING|2|64
+2004_7|main|RUNNING|1|32
 """
 
 
@@ -46,6 +53,20 @@ class LoadParsing(unittest.TestCase):
         self.assertEqual(gpu["jobs"]["pending"], 2)  # incl. the multi-partition job
         self.assertEqual(parts["debug"]["avail"], "down")
         self.assertEqual(parts["debug"]["time_limit_s"], 1800)
+
+    def test_arrays_and_task_requests(self):
+        self.assertEqual(array_task_count("123"), 1)
+        self.assertEqual(array_task_count("123_7"), 1)
+        self.assertEqual(array_task_count("123_[1-100]"), 100)
+        self.assertEqual(array_task_count("123_[1-10,20-25%4]"), 16)
+        self.assertEqual(array_task_count("123_[5]"), 1)
+        main = {p["partition"]: p for p in parse_load(SINFO, SQUEUE_TRICKY)}["main"]
+        self.assertEqual(main["cpus_per_node"], 32)
+        # 100 array tasks + 1 big job + 16 array tasks = 117 queued jobs
+        self.assertEqual(main["jobs"]["pending"], 117)
+        # 100 x 1 node + ceil(512/32)=16 nodes + 16 x 2 nodes = 148
+        self.assertEqual(main["pending_nodes"], 148)
+        self.assertEqual(main["jobs"]["running"], 1)
 
     def test_summary(self):
         summary = summarize_load(parse_load(SINFO, SQUEUE_ALL))

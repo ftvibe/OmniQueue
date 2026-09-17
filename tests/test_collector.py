@@ -88,12 +88,12 @@ class LocalClusterEndToEnd(unittest.TestCase):
     def test_happy_path(self):
         _fake_bin(self.bin, "squeue",
                   "case \"$*\" in\n"
-                  "  *--states=RUNNING,PENDING*) printf 'main|RUNNING|4|128\\nmain|PENDING|2|64\\n' ;;\n"
+                  "  *--states=RUNNING,PENDING*) printf '11|main|RUNNING|4|128\\n12|main|PENDING|2|64\\n' ;;\n"
                   f"  *--user=tester*) cat <<'X'\n{SQUEUE_OUT}X\n ;;\n"
                   "  *) echo bad user >&2; exit 9 ;;\n"
                   "esac\n")
         _fake_bin(self.bin, "sacct", f"cat <<'X'\n{SACCT_OUT}X\n")
-        _fake_bin(self.bin, "sinfo", "printf 'main*|up|10|allocated|320/0/0/320|1-00:00:00|2:16:1\\nmain*|up|3|idle|0/96/0/96|1-00:00:00|2:16:1\\n'\n")
+        _fake_bin(self.bin, "sinfo", "printf 'main*|up|10|allocated|320/0/0/320|1-00:00:00|2:16:1|32\\nmain*|up|3|idle|0/96/0/96|1-00:00:00|2:16:1|32\\n'\n")
         col = self._collector()
         col.refresh()
         snap = col.snapshot()

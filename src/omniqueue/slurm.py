@@ -87,8 +87,8 @@ MARK = "@@OMNIQUEUE"
 
 
 # cluster load: node states per partition and queue pressure from all users
-SINFO_FIELDS = "%P|%a|%D|%T|%C|%l|%z"  # partition, avail, nodes, state, cpus A/I/O/T, time limit, S:C:T
-SQUEUE_ALL_FIELDS = "%P|%T|%D|%C"  # partition, state, nodes, cpus (every user)
+SINFO_FIELDS = "%P|%a|%D|%T|%C|%l|%z|%c"  # partition, avail, nodes, state, cpus A/I/O/T, time limit, S:C:T, cpus/node
+SQUEUE_ALL_FIELDS = "%i|%P|%T|%D|%C"  # job id (arrays as ranges), partition, state, nodes, cpus (every user)
 
 
 def _partition_arg(partitions: list[str] | None) -> str:
@@ -165,6 +165,7 @@ def parse_load(sinfo_out: str, squeue_all_out: str) -> list[dict]:
             "nodes": {"idle": 0, "mixed": 0, "allocated": 0, "unavailable": 0, "total": 0},
             "cpus": {"allocated": 0, "idle": 0, "other": 0, "total": 0},
             "threads_per_core": 1,  # >1 when Slurm counts hyperthreads as CPUs (e.g. LUMI: 2)
+            "cpus_per_node": 0,  # largest node size seen in the partition (Slurm CPUs)
             "cores": {"allocated": 0, "idle": 0, "other": 0, "total": 0},
             "jobs": {"running": 0, "pending": 0},
             "pending_nodes": 0, "pending_cpus": 0, "running_nodes": 0,
@@ -176,8 +177,10 @@ def parse_load(sinfo_out: str, squeue_all_out: str) -> list[dict]:
             continue
         raw_name, avail, nodes, state, cpus, limit = (c.strip() for c in cols[:6])
         sct = cols[6].strip() if len(cols) > 6 else ""
+        cpn = cols[7].strip() if len(cols) > 7 else ""
         name = raw_name.rstrip("*")
         p = part(name)
+        p["cpus_per_node"] = max(p["cpus_per_node"], _int(cpn.rstrip("+")))
         try:  # %z is sockets:cores:threads; the thread count says what a Slurm CPU is
             tpc = int(sct.split(":")[2])
             if tpc > 1:
@@ -208,9 +211,10 @@ def parse_load(sinfo_out: str, squeue_all_out: str) -> list[dict]:
 
     for line in squeue_all_out.splitlines():
         cols = line.split("|")
-        if len(cols) < 4:
+        if len(cols) < 5:
             continue
-        raw_name, state, nodes, cpus = (c.strip() for c in cols[:4])
+        job_id, raw_name, state, nodes, cpus = (c.strip() for c in cols[:5])
+        count = array_task_count(job_id)  # a pending array shows as one row: count its tasks
         for name in raw_name.split(","):  # a job may list several partitions
             p = part(name.rstrip("*"))
             st = normalize_state(state)
@@ -218,15 +222,44 @@ def parse_load(sinfo_out: str, squeue_all_out: str) -> list[dict]:
                 p["jobs"]["running"] += 1
                 p["running_nodes"] += _int(nodes)
             elif st == "PENDING":
-                p["jobs"]["pending"] += 1
-                p["pending_nodes"] += _int(nodes)
-                p["pending_cpus"] += _int(cpus)
+                # `-n 512` without `-N` reports 1 node: estimate nodes from the CPU request too
+                by_cpus = -(-_int(cpus) // p["cpus_per_node"]) if p["cpus_per_node"] else 0
+                p["jobs"]["pending"] += count
+                p["pending_nodes"] += max(_int(nodes), by_cpus) * count
+                p["pending_cpus"] += _int(cpus) * count
     for p in parts.values():
         p["pending_cores"] = p["pending_cpus"] // p["threads_per_core"]
 
     out = list(parts.values())
     out.sort(key=lambda p: (not p["default"], p["partition"]))
     return out
+
+
+_ARRAY_RE = re.compile(r"_\[(?P<spec>[^\]]+)\]$")
+
+
+def array_task_count(job_id: str) -> int:
+    """Number of tasks a squeue job id stands for: ``123`` -> 1, ``123_7`` -> 1,
+    ``123_[1-100]`` -> 100, ``123_[1-10,20-25%4]`` -> 16."""
+    m = _ARRAY_RE.search(job_id)
+    if not m:
+        return 1
+    spec = m.group("spec").split("%")[0]  # drop a throttle like %4
+    total = 0
+    for chunk in spec.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if "-" in chunk:
+            lo, hi = chunk.split("-", 1)
+            hi = hi.split(":")[0]  # a step such as 1-10:2 is rare; count the range
+            try:
+                total += int(hi) - int(lo) + 1
+            except ValueError:
+                total += 1
+        else:
+            total += 1
+    return max(total, 1)
 
 
 def summarize_load(partitions: list[dict]) -> dict:

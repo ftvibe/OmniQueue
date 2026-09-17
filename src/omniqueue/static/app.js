@@ -359,7 +359,9 @@
         el("thead", {}, el("tr", {},
           el("th", {}, "Partition"), el("th", {}, "Nodes"), el("th", { class: "num" }, "Free nodes"), el("th", { class: "num" }, "Total"),
           el("th", { class: "num", title: "physical cores: idle / total" }, "Free cores"), el("th", { class: "num" }, "Max time"),
-          el("th", { class: "num" }, "Running"), el("th", { class: "num" }, "Queued"), el("th", { class: "num" }, "Nodes wanted"))),
+          el("th", { class: "num", title: "running jobs, all users" }, "Running"),
+          el("th", { class: "num", title: "pending jobs from all users; array tasks counted individually" }, "Queued jobs"),
+          el("th", { class: "num", title: "nodes those queued jobs need in total: the larger of the requested node count and requested CPUs / CPUs per node" }, "Nodes needed"))),
         el("tbody", {}, ...c.partitions.map((p) => partitionRow(p))));
       box.append(el("div", { class: "parts-wrap" }, table));
       root.append(box);
@@ -385,7 +387,7 @@
       el("td", { class: "num" }, fmtLimit(p.time_limit_s)),
       el("td", { class: "num" }, fmtInt(p.jobs.running)),
       el("td", { class: `num pressure ${pressure}` }, fmtInt(p.jobs.pending)),
-      el("td", { class: `num pressure ${pressure}`, title: "nodes requested by all queued jobs" }, fmtInt(wanted)),
+      el("td", { class: `num pressure ${pressure}`, title: "nodes the queued jobs need in total (estimate)" }, fmtInt(wanted)),
     );
   }
 

@@ -189,8 +189,11 @@ cluster names from your config, `list --state` the job states.
   jobs for a view of each cluster: CPU utilisation, and per partition the node
   states as a bar (idle / mixed / allocated / down), free nodes and free
   physical cores, the time limit, and the queue pressure from *all* users:
-  running jobs, queued jobs and how many nodes they are asking for. Free nodes
-  counts fully idle nodes; free cores also includes the empty cores of mixed
+  running jobs, queued jobs and how many nodes they need. Queued jobs counts
+  array tasks individually, and the nodes needed take the larger of a job's
+  node request and its CPU request divided by the partition's CPUs per node,
+  since a job submitted with `-n` alone reports one node. Free nodes counts
+  fully idle nodes; free cores also includes the empty cores of mixed
   nodes. On clusters where Slurm counts hardware threads as CPUs (LUMI, for
   instance, reports 256 per 128-core node) the figures are divided by the
   threads per core and a note says so, so you always read cores. Free nodes
