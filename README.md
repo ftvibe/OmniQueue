@@ -292,7 +292,7 @@ zone).
 
 The octopus sprite comes from `tools/make_logo.py` (`logo.svg`, `favicon.svg`).
 The combined logo with lettering is `logo_text.svg`; `logo_text_dark.svg` is the
-same file with the lettering recoloured for the dark theme.
+same file with the lettering in a lighter teal for the dark theme.
 
 ```sh
 python -m unittest discover -s tests -v
