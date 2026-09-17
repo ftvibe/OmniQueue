@@ -1,0 +1,338 @@
+/* OmniQueue dashboard: polls /api/state and renders clusters + jobs. No dependencies. */
+(() => {
+  "use strict";
+
+  const POLL_MS = 5000;
+  const $ = (sel, root = document) => root.querySelector(sel);
+  const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+
+  const prefs = loadPrefs();
+  const state = {
+    snapshot: null,
+    tab: prefs.tab || "all",
+    sort: prefs.sort || { key: "submit_time", desc: true },
+    search: "",
+    hiddenClusters: new Set(prefs.hiddenClusters || []),
+    windowHours: prefs.windowHours ?? 72,
+    selected: null,
+    error: null,
+  };
+
+  // ---------- helpers ----------
+  function loadPrefs() {
+    try { return JSON.parse(localStorage.getItem("omniqueue.prefs") || "{}"); } catch { return {}; }
+  }
+  function savePrefs() {
+    try {
+      localStorage.setItem("omniqueue.prefs", JSON.stringify({
+        tab: state.tab, sort: state.sort, hiddenClusters: [...state.hiddenClusters], windowHours: state.windowHours,
+      }));
+    } catch { /* ignore */ }
+  }
+  const pad = (n) => String(n).padStart(2, "0");
+  function fmtDuration(s) {
+    if (s === null || s === undefined) return "–";
+    s = Math.max(0, Math.round(s));
+    const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    if (d) return `${d}d ${pad(h)}:${pad(m)}`;
+    return `${pad(h)}:${pad(m)}:${pad(sec)}`;
+  }
+  function parseSlurmTime(t) {
+    // Slurm prints local cluster time without a zone; treat it as browser local.
+    if (!t) return null;
+    const d = new Date(t.replace(" ", "T"));
+    return isNaN(d) ? null : d;
+  }
+  function fmtTime(t) {
+    const d = parseSlurmTime(t);
+    if (!d) return "–";
+    const now = new Date();
+    const sameDay = d.toDateString() === now.toDateString();
+    const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    if (sameDay) return hm;
+    return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hm}`;
+  }
+  function ago(unix) {
+    if (!unix) return "never";
+    const s = Math.round(Date.now() / 1000 - unix);
+    if (s < 5) return "just now";
+    if (s < 60) return `${s}s ago`;
+    if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+    if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+    return `${Math.floor(s / 86400)}d ago`;
+  }
+  function el(tag, attrs = {}, ...children) {
+    const e = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === "class") e.className = v;
+      else if (k === "style") e.style.cssText = v;
+      else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+      else if (v !== null && v !== undefined) e.setAttribute(k, v);
+    }
+    for (const c of children.flat()) if (c !== null && c !== undefined) e.append(c.nodeType ? c : String(c));
+    return e;
+  }
+  const STATE_LABEL = {
+    RUNNING: "running", PENDING: "pending", COMPLETED: "completed", FAILED: "failed", TIMEOUT: "timeout",
+    OUT_OF_MEMORY: "out of memory", CANCELLED: "cancelled", NODE_FAIL: "node fail", COMPLETING: "completing",
+    CONFIGURING: "configuring", SUSPENDED: "suspended", PREEMPTED: "preempted", REQUEUED: "requeued",
+    VANISHED: "vanished", BOOT_FAIL: "boot fail", DEADLINE: "deadline",
+  };
+  const stateLabel = (s) => STATE_LABEL[s] || s.toLowerCase().replace(/_/g, " ");
+
+  // ---------- data ----------
+  async function fetchState() {
+    try {
+      const res = await fetch("/api/state", { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      state.snapshot = await res.json();
+      state.error = null;
+    } catch (err) {
+      state.error = `dashboard cannot reach the OmniQueue server (${err.message})`;
+    }
+    render();
+  }
+  async function requestRefresh() {
+    try { await fetch("/api/refresh", { method: "POST" }); } catch { /* shown on next poll */ }
+    $("#refresh-state").textContent = "refreshing…";
+    $("#refresh-state").classList.add("spin");
+    setTimeout(fetchState, 800);
+  }
+  async function forgetJob(key) {
+    await fetch(`/api/forget/${encodeURIComponent(key)}`, { method: "POST" });
+    closeDrawer();
+    setTimeout(fetchState, 500);
+  }
+
+  function clusterColor(name) {
+    const c = state.snapshot?.clusters.find((x) => x.name === name);
+    return c?.color || autoColor(name);
+  }
+  const AUTO = ["#2f6fed", "#e0803a", "#2fa45a", "#a25ad6", "#c94f7c", "#3aa6b5", "#9c8a2b", "#6f7d8c"];
+  const autoIndex = new Map();
+  function autoColor(name) {
+    if (!autoIndex.has(name)) autoIndex.set(name, autoIndex.size);
+    return AUTO[autoIndex.get(name) % AUTO.length];
+  }
+
+  function visibleJobs() {
+    const snap = state.snapshot;
+    if (!snap) return [];
+    const q = state.search.trim().toLowerCase();
+    const cutoff = state.windowHours ? Date.now() - state.windowHours * 3600e3 : 0;
+    return snap.jobs.filter((j) => {
+      if (state.hiddenClusters.has(j.cluster)) return false;
+      if (state.tab !== "all" && j.category !== state.tab && !(state.tab === "problem" && j.category === "unknown")) return false;
+      if (cutoff && j.terminal) {
+        const end = parseSlurmTime(j.end_time) || new Date(j.last_seen * 1000);
+        if (end && end.getTime() < cutoff) return false;
+      }
+      if (q) {
+        const hay = `${j.cluster} ${j.job_id} ${j.name} ${j.state} ${j.node_list} ${j.reason} ${j.partition} ${j.account} ${j.work_dir} ${j.exit_summary}`.toLowerCase();
+        if (!q.split(/\s+/).every((w) => hay.includes(w))) return false;
+      }
+      return true;
+    });
+  }
+
+  function sortJobs(jobs) {
+    const { key, desc } = state.sort;
+    const dir = desc ? -1 : 1;
+    const val = (j) => {
+      const v = j[key];
+      if (key.endsWith("_time")) return parseSlurmTime(v)?.getTime() ?? -Infinity;
+      if (key === "job_id") return parseFloat(String(v).replace(/[^\d.]/g, "")) || 0;
+      if (typeof v === "number") return v;
+      return v === null || v === undefined ? "" : String(v).toLowerCase();
+    };
+    return jobs.sort((a, b) => {
+      const va = val(a), vb = val(b);
+      if (va < vb) return -1 * dir;
+      if (va > vb) return 1 * dir;
+      return a.job_id < b.job_id ? -1 : 1;
+    });
+  }
+
+  // ---------- render ----------
+  function render() {
+    renderHeader();
+    renderClusters();
+    renderTabs();
+    renderTable();
+    if (state.selected) renderDrawer();
+  }
+
+  function renderHeader() {
+    const snap = state.snapshot;
+    const line = $("#summary-line");
+    const rs = $("#refresh-state");
+    if (!snap) { line.textContent = state.error || "connecting…"; return; }
+    const counts = { running: 0, pending: 0, ok: 0, problem: 0 };
+    for (const j of snap.jobs) if (counts[j.category] !== undefined) counts[j.category]++;
+    const okClusters = snap.clusters.filter((c) => c.ok).length;
+    line.textContent = `${okClusters}/${snap.clusters.length} clusters · ${counts.running} running · ${counts.pending} pending · ${counts.problem} failed`;
+    rs.classList.toggle("spin", !!snap.refreshing);
+    rs.textContent = snap.refreshing ? "refreshing…" : `polled ${ago(snap.last_refresh)} · every ${snap.refresh_seconds}s`;
+    $("#footer-note").textContent = state.error
+      ? state.error
+      : `finished jobs come from sacct (last ${snap.lookback_hours} h) plus the local history; times are shown as the cluster reports them.`;
+  }
+
+  function renderClusters() {
+    const root = $("#clusters");
+    root.replaceChildren();
+    const snap = state.snapshot;
+    if (!snap) return;
+    for (const c of snap.clusters) {
+      const hidden = state.hiddenClusters.has(c.name);
+      const counts = c.counts || {};
+      const card = el("div", {
+        class: `card ${hidden ? "off" : ""} ${c.ok ? "" : "err"}`,
+        style: `--card-color:${clusterColor(c.name)}`,
+        title: hidden ? "click to show this cluster's jobs" : "click to hide this cluster's jobs",
+        onclick: () => { hidden ? state.hiddenClusters.delete(c.name) : state.hiddenClusters.add(c.name); savePrefs(); render(); },
+      },
+        el("div", { class: "card-head" }, el("b", {}, c.name), el("small", {}, c.host)),
+        el("div", { class: "card-counts" },
+          ...["running", "pending", "problem", "ok"].map((k) =>
+            el("span", { class: `pill ${k}`, title: k }, `${counts[k] || 0} ${k === "ok" ? "done" : k === "problem" ? "failed" : k}`)),
+        ),
+        el("div", { class: "card-foot" },
+          el("span", {}, c.ok ? `polled ${ago(c.last_success)}` : c.last_success ? `last ok ${ago(c.last_success)}` : "never reached"),
+          el("span", {}, c.poll_seconds != null ? `${c.poll_seconds.toFixed(1)}s` : ""),
+        ),
+        c.error ? el("div", { class: "card-error" }, `⚠ ${c.error}`) : null,
+        c.warning ? el("div", { class: "card-warn" }, `⚠ ${c.warning}`) : null,
+      );
+      root.append(card);
+    }
+  }
+
+  function renderTabs() {
+    const snap = state.snapshot;
+    const counts = { all: 0, running: 0, pending: 0, ok: 0, problem: 0 };
+    if (snap) {
+      const cutoff = state.windowHours ? Date.now() - state.windowHours * 3600e3 : 0;
+      for (const j of snap.jobs) {
+        if (state.hiddenClusters.has(j.cluster)) continue;
+        if (cutoff && j.terminal) {
+          const end = parseSlurmTime(j.end_time) || new Date(j.last_seen * 1000);
+          if (end && end.getTime() < cutoff) continue;
+        }
+        counts.all++;
+        const k = j.category === "unknown" ? "problem" : j.category;
+        if (counts[k] !== undefined) counts[k]++;
+      }
+    }
+    for (const b of $$("#tabs button")) {
+      b.classList.toggle("active", b.dataset.tab === state.tab);
+      $(".count", b).textContent = counts[b.dataset.tab] ?? 0;
+    }
+  }
+
+  function renderTable() {
+    const tbody = $("#jobs tbody");
+    const jobs = sortJobs(visibleJobs());
+    $("#empty").hidden = jobs.length > 0;
+    for (const th of $$("#jobs th")) {
+      th.classList.toggle("sorted", th.dataset.sort === state.sort.key);
+      th.classList.toggle("desc", th.dataset.sort === state.sort.key && state.sort.desc);
+    }
+    const rows = jobs.map((j) => {
+      const note = j.category === "pending" ? j.reason : (j.exit_summary || (j.category === "unknown" ? j.reason : ""));
+      const tr = el("tr", { class: state.selected === j.key ? "selected" : "", "data-key": j.key, onclick: () => openDrawer(j.key) },
+        el("td", {}, el("span", { class: "cl", style: `--card-color:${clusterColor(j.cluster)}` }, j.cluster)),
+        el("td", { class: "mono" }, j.job_id),
+        el("td", { class: "name", title: j.name }, j.name),
+        el("td", {}, el("span", { class: `state ${j.category}` }, stateLabel(j.state))),
+        el("td", { class: "num mono" }, elapsedCell(j)),
+        el("td", { class: "num mono" }, fmtDuration(j.time_limit_s)),
+        el("td", { class: "num" }, j.nodes || "–"),
+        el("td", { class: "mono", title: j.submit_time }, fmtTime(j.submit_time)),
+        el("td", { class: "mono", title: j.start_time }, fmtTime(j.start_time)),
+        el("td", { class: "mono", title: j.end_time }, fmtTime(j.end_time)),
+        el("td", { class: `note ${j.category === "problem" || j.category === "unknown" ? "problem" : ""}`, title: note }, note || ""),
+      );
+      return tr;
+    });
+    tbody.replaceChildren(...rows);
+  }
+
+  function elapsedCell(j) {
+    if (j.category !== "running" || !j.time_limit_s) return fmtDuration(j.elapsed_s);
+    // running jobs age between polls: extrapolate from last_seen
+    const live = (j.elapsed_s || 0) + Math.max(0, Date.now() / 1000 - j.last_seen);
+    const frac = Math.min(1, live / j.time_limit_s);
+    return el("span", {},
+      el("span", { class: "bar " + (frac > 0.9 ? "hot" : ""), title: `${Math.round(frac * 100)}% of time limit used` },
+        el("i", { style: `width:${(frac * 100).toFixed(1)}%` }),
+        el("span", {}, fmtDuration(live))));
+  }
+
+  // ---------- drawer ----------
+  function openDrawer(key) { state.selected = key; renderDrawer(); renderTable(); }
+  function closeDrawer() { state.selected = null; $("#drawer").hidden = true; renderTable(); }
+  function renderDrawer() {
+    const j = state.snapshot?.jobs.find((x) => x.key === state.selected);
+    const drawer = $("#drawer");
+    if (!j) { drawer.hidden = true; return; }
+    drawer.hidden = false;
+    $("#drawer-title").textContent = `${j.cluster} · ${j.job_id} · ${j.name}`;
+    const fields = [
+      ["state", el("span", { class: `state ${j.category}` }, stateLabel(j.state))],
+      ["note", j.exit_summary || j.reason || "–"],
+      ["exit code", j.exit_code || "–"],
+      ["elapsed", fmtDuration(j.elapsed_s)],
+      ["time limit", fmtDuration(j.time_limit_s)],
+      ["submitted", j.submit_time || "–"],
+      ["started", j.start_time || "–"],
+      ["ended", j.end_time || "–"],
+      ["queue wait", waitTime(j)],
+      ["nodes", `${j.nodes || "–"}${j.node_list ? "  " + j.node_list : ""}`],
+      ["cpus", j.cpus || "–"],
+      ["partition", j.partition || "–"],
+      ["account", j.account || "–"],
+      ["user", j.user || "–"],
+      ["work dir", j.work_dir || "–"],
+      ["source", `${j.source} · seen ${ago(j.last_seen)}`],
+    ];
+    $("#drawer-body").replaceChildren(...fields.flatMap(([k, v]) => [el("dt", {}, k), el("dd", {}, v)]));
+    $("#forget").onclick = () => { if (confirm(`Remove ${j.job_id} on ${j.cluster} from the local history?`)) forgetJob(j.key); };
+    $("#forget").hidden = !j.terminal && j.state !== "VANISHED";
+  }
+  function waitTime(j) {
+    const s = parseSlurmTime(j.submit_time), st = parseSlurmTime(j.start_time);
+    if (!s || !st) return "–";
+    return fmtDuration((st - s) / 1000);
+  }
+
+  // ---------- wiring ----------
+  $("#refresh").addEventListener("click", requestRefresh);
+  $("#search").addEventListener("input", (e) => { state.search = e.target.value; renderTable(); });
+  $("#window").value = String(state.windowHours);
+  $("#window").addEventListener("change", (e) => { state.windowHours = Number(e.target.value); savePrefs(); render(); });
+  $("#drawer-close").addEventListener("click", closeDrawer);
+  $("#tabs").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-tab]");
+    if (!b) return;
+    state.tab = b.dataset.tab; savePrefs(); render();
+  });
+  $("#jobs thead").addEventListener("click", (e) => {
+    const th = e.target.closest("th[data-sort]");
+    if (!th) return;
+    const key = th.dataset.sort;
+    state.sort = state.sort.key === key ? { key, desc: !state.sort.desc } : { key, desc: key.endsWith("_time") || key.endsWith("_s") };
+    savePrefs(); renderTable();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.target.matches("input, select, textarea")) { if (e.key === "Escape") e.target.blur(); return; }
+    if (e.key === "/") { e.preventDefault(); $("#search").focus(); }
+    else if (e.key === "r") requestRefresh();
+    else if (e.key === "Escape") closeDrawer();
+    else if ("12345".includes(e.key)) { const b = $$("#tabs button")[Number(e.key) - 1]; if (b) b.click(); }
+  });
+
+  fetchState();
+  setInterval(fetchState, POLL_MS);
+  setInterval(() => { if (state.snapshot) { renderHeader(); renderTable(); } }, 1000); // live elapsed counters
+})();

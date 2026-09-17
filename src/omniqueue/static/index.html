@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OmniQueue</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="logo">⋮⋮</span>
+    <h1>OmniQueue</h1>
+    <span class="sub" id="summary-line">connecting…</span>
+  </div>
+  <div class="controls">
+    <input id="search" type="search" placeholder="filter: name, id, node, reason…  ( / )" autocomplete="off">
+    <select id="window" title="Only show finished jobs newer than this">
+      <option value="24">finished &lt; 24 h</option>
+      <option value="72" selected>finished &lt; 3 d</option>
+      <option value="168">finished &lt; 7 d</option>
+      <option value="0">all history</option>
+    </select>
+    <button id="refresh" title="Poll all clusters now (r)">↻ refresh</button>
+    <span id="refresh-state" class="muted"></span>
+  </div>
+</header>
+
+<section id="clusters" class="clusters" aria-label="Clusters"></section>
+
+<nav class="tabs" id="tabs" role="tablist">
+  <button data-tab="all" role="tab">All <span class="count"></span></button>
+  <button data-tab="running" role="tab" class="c-running">Running <span class="count"></span></button>
+  <button data-tab="pending" role="tab" class="c-pending">Pending <span class="count"></span></button>
+  <button data-tab="problem" role="tab" class="c-problem">Failed <span class="count"></span></button>
+  <button data-tab="ok" role="tab" class="c-ok">Completed <span class="count"></span></button>
+</nav>
+
+<main>
+  <table id="jobs" class="jobs">
+    <thead>
+      <tr>
+        <th data-sort="cluster">Cluster</th>
+        <th data-sort="job_id">Job ID</th>
+        <th data-sort="name">Name</th>
+        <th data-sort="state">State</th>
+        <th data-sort="elapsed_s" class="num">Elapsed</th>
+        <th data-sort="time_limit_s" class="num">Limit</th>
+        <th data-sort="nodes" class="num">Nodes</th>
+        <th data-sort="submit_time">Submitted</th>
+        <th data-sort="start_time">Started</th>
+        <th data-sort="end_time">Ended</th>
+        <th>Note</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+  <p id="empty" class="empty" hidden>No jobs match.</p>
+</main>
+
+<aside id="drawer" class="drawer" hidden>
+  <div class="drawer-head">
+    <h2 id="drawer-title"></h2>
+    <button id="drawer-close" title="close (Esc)">✕</button>
+  </div>
+  <dl id="drawer-body"></dl>
+  <div class="drawer-actions">
+    <button id="forget" class="danger" title="Remove this job from the local history">forget job</button>
+  </div>
+</aside>
+
+<footer class="foot">
+  <span id="footer-note"></span>
+  <span class="muted">keys: <kbd>/</kbd> search · <kbd>r</kbd> refresh · <kbd>1</kbd>–<kbd>5</kbd> tabs · <kbd>Esc</kbd> close</span>
+</footer>
+<script src="/app.js"></script>
+</body>
+</html>
