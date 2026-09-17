@@ -361,7 +361,7 @@
           el("th", { class: "num", title: "physical cores: idle / total" }, "Free cores"), el("th", { class: "num" }, "Max time"),
           el("th", { class: "num" }, "Running"), el("th", { class: "num" }, "Queued"), el("th", { class: "num" }, "Nodes wanted"))),
         el("tbody", {}, ...c.partitions.map((p) => partitionRow(p))));
-      box.append(table);
+      box.append(el("div", { class: "parts-wrap" }, table));
       root.append(box);
     }
     if (!root.children.length) root.append(el("div", { class: "load-empty" }, "no clusters to show"));

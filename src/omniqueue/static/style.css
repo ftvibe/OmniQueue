@@ -122,6 +122,7 @@ main { padding: 0 20px 24px; overflow-x: auto; }
 #load-clusters { display: grid; gap: 16px; }
 .load-filter { color: var(--muted); font-size: 12px; }
 .load-cluster { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--card-color, var(--border)); border-radius: 8px; box-shadow: var(--shadow); overflow: hidden; }
+.parts-wrap { overflow-x: auto; }
 .load-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
 .load-head b { font-size: 15px; }
 .load-head .gauge { display: inline-flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: 13px; }
@@ -129,16 +130,16 @@ main { padding: 0 20px 24px; overflow-x: auto; }
 .gauge-bar i { display: block; height: 100%; background: var(--running); }
 .gauge-bar.hot i { background: var(--problem); }
 .load-head .muted { font-size: 12px; }
-table.parts { width: 100%; border-collapse: collapse; }
-.parts th { text-align: left; font-weight: 600; color: var(--ink-2); font-size: 12px; text-transform: uppercase; letter-spacing: .4px; padding: 8px 12px; background: var(--surface-2); border-bottom: 1px solid var(--border); white-space: nowrap; }
-.parts td { padding: 8px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; vertical-align: middle; font-variant-numeric: tabular-nums; }
+table.parts { width: 100%; min-width: 640px; border-collapse: collapse; }
+.parts th { text-align: left; font-weight: 600; color: var(--ink-2); font-size: 12px; text-transform: uppercase; letter-spacing: .4px; padding: 8px 10px; background: var(--surface-2); border-bottom: 1px solid var(--border); white-space: normal; line-height: 1.2; vertical-align: bottom; }
+.parts td { padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; vertical-align: middle; font-variant-numeric: tabular-nums; }
 .parts tr:last-child td { border-bottom: none; }
 .parts th.num, .parts td.num { text-align: right; }
 .parts td.free { font-weight: 700; }
 .parts td.free.none { color: var(--muted); font-weight: 400; }
 .parts .default-tag { color: var(--muted); font-size: 11px; margin-left: 6px; }
 .parts .down-tag { color: var(--problem); font-size: 11px; margin-left: 6px; }
-.stack { display: flex; width: 220px; height: 12px; border-radius: 4px; overflow: hidden; background: var(--surface-2); }
+.stack { display: flex; width: clamp(110px, 16vw, 220px); height: 12px; border-radius: 4px; overflow: hidden; background: var(--surface-2); }
 .stack i { display: block; height: 100%; }
 .stack .idle { background: var(--ok); }
 .stack .mixed { background: var(--pending); }
