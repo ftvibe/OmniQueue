@@ -54,11 +54,15 @@ def arm(points: list[tuple[float, float]], s0: int, s1: int) -> None:
         done += seg
 
 
-# ---- head: tall dome, plus the body mass the arms grow from ---------------------------
-ellipse(24, 14.5, 10.2, 11.5, BODY)
-for y in range(22, 33):
-    put_w = 14 if y < 30 else 10
-    for x in range(24 - put_w // 2, 24 + put_w // 2):
+# ---- head: an egg-shaped mantle, widest above the middle, tapering to the arm crown ----
+# half-width of the mantle per row (centre x = 24)
+PROFILE = {
+    1: 3, 2: 5, 3: 7, 4: 8, 5: 9, 6: 10, 7: 10, 8: 11, 9: 11, 10: 11, 11: 11, 12: 11, 13: 11,
+    14: 11, 15: 10, 16: 10, 17: 10, 18: 9, 19: 9, 20: 9, 21: 8, 22: 8, 23: 8, 24: 7, 25: 7,
+    26: 7, 27: 7, 28: 7, 29: 8, 30: 8, 31: 9, 32: 9,
+}
+for y, hw in PROFILE.items():
+    for x in range(24 - hw, 24 + hw):
         put(x, y, BODY)
 
 # ---- arms (asymmetric like a real one) --------------------------------------------------
@@ -81,10 +85,10 @@ for (x, y), c in list(g.items()):
         g[(x, y)] = SHADE
 
 # ---- eyes: two plain squares ---------------------------------------------------------------
-for ex in (19, 27):
+for ex in (18, 28):
     for dx in range(2):
         for dy in range(2):
-            put(ex + dx, 16 + dy, EYE)
+            put(ex + dx, 20 + dy, EYE)
 
 
 # ---- balls at the arm tips, one colour per source -------------------------------------------
