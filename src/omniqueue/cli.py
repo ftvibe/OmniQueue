@@ -75,10 +75,16 @@ def cmd_serve(args) -> int:
     url = f"http://{cfg.listen_host}:{server.server_address[1]}/"
     if cfg.access_token:
         url += f"?token={cfg.access_token}"
+    if getattr(args, "view", "dashboard") == "widget":
+        # the token cookie is set by "/?token=..." and then redirects to "/"; go straight to the widget otherwise
+        url = f"http://{cfg.listen_host}:{server.server_address[1]}/widget" if not cfg.access_token else url
     for w in _perm_warnings(cfg, args):
         print(f"warning: {w}")
     names = ", ".join(c.name for c in cfg.enabled_clusters)
-    print(f"OmniQueue {__version__} watching {names}\nDashboard: {url}  (Ctrl-C to stop)")
+    view = getattr(args, "view", "dashboard")
+    print(f"OmniQueue {__version__} watching {names}\n{'Widget' if view == 'widget' else 'Dashboard'}: {url}  (Ctrl-C to stop)")
+    if view == "widget" and cfg.access_token:
+        print("open /widget in that window once the token cookie is set")
     if args.open:
         threading.Timer(0.5, webbrowser.open, args=(url,)).start()
     if cfg.persist_connections and not getattr(args, "demo", False):
@@ -258,6 +264,8 @@ def build_parser() -> argparse.ArgumentParser:
         s.add_argument("--port", type=int, help="override listen_port")
         s.add_argument("--host", help="override listen_host")
         if open_default:
+            s.add_argument("view", nargs="?", choices=["dashboard", "widget"], default="dashboard",
+                           help="what to open: the full dashboard (default) or only the side widget")
             s.add_argument("--no-open", dest="open", action="store_false", help="do not open a browser")
         else:
             s.add_argument("--open", action="store_true", help="open the dashboard in a browser")

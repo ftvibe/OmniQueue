@@ -139,6 +139,7 @@ network change that dropped the connection.
 | command | what it does |
 |---|---|
 | `omniqueue monitor [--port N]` | poll all clusters in the background, serve the dashboard and open it |
+| `omniqueue monitor widget` | the same, but open only the side widget |
 | `omniqueue serve [--open]` | the same without opening a browser (for a headless machine) |
 | `omniqueue login [CLUSTER...]` | open the persistent ssh connection, allowing password / 2FA |
 | `omniqueue active` | list the open ssh connections, their PIDs, last use and when they close |
@@ -226,8 +227,9 @@ If you run OmniQueue on a remote machine, forward the port with
 ## The side widget
 
 `http://127.0.0.1:8765/widget` is a compact page for a narrow window kept at
-the side of the screen (the **▯ widget** button or `w` in the dashboard opens
-it as a small pop-up). It shows one line per cluster with running / queued /
+the side of the screen. `omniqueue monitor widget` starts OmniQueue and opens
+just that page; from the dashboard the **▯ widget** button or `w` opens it as
+a small pop-up. It shows one line per cluster with running / queued /
 failed / done counts and the ssh state, an **Alerts** list of jobs that
 failed, timed out, ran out of memory, lost a node or were cancelled in the
 last 48 h (dismiss them one by one or all at once), then the most recently

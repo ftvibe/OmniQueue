@@ -18,6 +18,18 @@ class CompletionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             script("powershell")
 
+    def test_monitor_view_argument(self):
+        from omniqueue.cli import build_parser
+
+        p = build_parser()
+        self.assertEqual(p.parse_args(["monitor"]).view, "dashboard")
+        self.assertEqual(p.parse_args(["monitor", "widget"]).view, "widget")
+        self.assertTrue(p.parse_args(["monitor", "widget"]).open)
+        with self.assertRaises(SystemExit):
+            p.parse_args(["monitor", "bogus"])
+        for shell in ("bash", "zsh", "fish"):
+            self.assertIn("widget", script(shell))
+
     def test_bash_script_parses(self):
         proc = subprocess.run(["bash", "-n"], input=script("bash"), text=True, capture_output=True)
         self.assertEqual(proc.returncode, 0, proc.stderr)
