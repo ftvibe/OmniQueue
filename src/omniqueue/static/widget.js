@@ -99,8 +99,14 @@
     $("#w-summary").textContent = snapshot.offline ? "no cluster reachable" : `${c.running} running · ${c.pending} queued · ${c.problem} failed`;
     $("#w-summary").classList.toggle("offline", !!snapshot.offline);
 
-    // clusters
+    // clusters, with a header row naming the four columns
     const root = $("#w-clusters"); root.replaceChildren();
+    root.append(el("div", { class: "w-chead" },
+      el("span", { class: "w-cname" }, "cluster"),
+      el("span", { class: "w-counts" },
+        el("span", { class: "running", title: "running now" }, "run"), el("span", { class: "pending", title: "waiting in the queue" }, "queue"),
+        el("span", { class: "problem", title: "failed, timed out, out of memory, cancelled" }, "fail"), el("span", { class: "ok", title: "completed" }, "done")),
+      el("span", { class: "w-dot", style: "visibility:hidden" })));
     for (const cl of snapshot.clusters) {
       const n = cl.counts || {};
       const state = cl.ok ? "ok" : cl.error_kind === "login" ? "login" : "err";
@@ -109,8 +115,10 @@
         el("span", { class: "w-cname" }, clusterPill(cl.name)),
         cl.ok
           ? el("span", { class: "w-counts" },
-              el("b", { class: "running" }, n.running || 0), el("b", { class: "pending" }, n.pending || 0),
-              el("b", { class: "problem" }, n.problem || 0), el("b", { class: "ok" }, n.ok || 0))
+              el("b", { class: `running ${n.running ? "" : "zero"}`, title: `${n.running || 0} running` }, n.running || 0),
+              el("b", { class: `pending ${n.pending ? "" : "zero"}`, title: `${n.pending || 0} waiting in the queue` }, n.pending || 0),
+              el("b", { class: `problem ${n.problem ? "" : "zero"}`, title: `${n.problem || 0} failed / timed out / cancelled` }, n.problem || 0),
+              el("b", { class: `ok ${n.ok ? "" : "zero"}`, title: `${n.ok || 0} completed` }, n.ok || 0))
           : el("span", { class: "w-cerr" }, state === "login" ? "not logged in" : "unreachable"),
         el("span", { class: `w-dot ${cl.connected === false ? "off" : cl.connected ? "on" : ""}`, title: cl.connected ? "ssh connected" : cl.connected === false ? "ssh not connected" : "" })));
     }

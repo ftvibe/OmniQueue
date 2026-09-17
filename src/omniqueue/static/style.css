@@ -219,7 +219,12 @@ body.widget { font-size: 13px; }
 .w-cluster.err { border-color: var(--problem); border-left-color: var(--problem); }
 .w-cname { flex: 1; font-weight: 600; }
 .w-counts { display: flex; gap: 4px; font-variant-numeric: tabular-nums; }
-.w-counts b { min-width: 26px; text-align: center; border-radius: 4px; padding: 1px 5px; font-size: 12px; }
+.w-counts b, .w-counts span { width: 44px; text-align: center; border-radius: 4px; padding: 1px 4px; font-size: 12px; box-sizing: border-box; }
+.w-counts b.zero { opacity: .45; font-weight: 500; }
+.w-chead { display: flex; align-items: center; gap: 8px; padding: 0 10px 0 13px; font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
+.w-chead .w-cname { font-weight: 600; }
+.w-chead .w-counts span { background: none; padding: 0; font-weight: 700; }
+.w-chead .running { color: var(--running); } .w-chead .pending { color: var(--pending); } .w-chead .problem { color: var(--problem); } .w-chead .ok { color: var(--ok); }
 .w-counts .running { color: var(--running); background: var(--running-bg); }
 .w-counts .pending { color: var(--pending); background: var(--pending-bg); }
 .w-counts .problem { color: var(--problem); background: var(--problem-bg); }
