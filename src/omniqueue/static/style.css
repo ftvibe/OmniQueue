@@ -214,7 +214,8 @@ body.widget { font-size: 13px; }
 .w-actions button { padding: 3px 8px; }
 .w-actions button.on { border-color: var(--ok); }
 .w-clusters { display: grid; gap: 6px; padding: 10px 12px 4px; }
-.w-cluster { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--card-color); border-radius: 6px; }
+.w-cluster { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--surface); border: 1px solid var(--border); border-left: 5px solid var(--card-color); border-radius: 6px; }
+.w-cluster .w-cpill { font-size: 12px; line-height: 20px; padding: 0 9px; }
 .w-cluster.err { border-color: var(--problem); border-left-color: var(--problem); }
 .w-cname { flex: 1; font-weight: 600; }
 .w-counts { display: flex; gap: 4px; font-variant-numeric: tabular-nums; }
@@ -235,8 +236,9 @@ body.widget { font-size: 13px; }
 .w-link { margin-left: auto; background: none; border: none; color: var(--muted); font-size: 11px; padding: 0; text-transform: none; letter-spacing: 0; }
 .w-link:hover { color: var(--ink); }
 .w-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
-.w-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; }
-.w-item.alert { border-left: 3px solid var(--problem); }
+.w-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--surface); border: 1px solid var(--border); border-left: 5px solid var(--card-color, var(--border)); border-radius: 6px; }
+.w-cpill { display: inline-block; padding: 0 7px; border-radius: 999px; font-size: 11px; font-weight: 700; line-height: 16px; letter-spacing: .2px; vertical-align: middle; }
+.w-sub .w-cpill { margin-right: 4px; }
 .w-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .w-main b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .w-sub { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

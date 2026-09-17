@@ -44,6 +44,20 @@
     NODE_FAIL: "node failure", PREEMPTED: "preempted", BOOT_FAIL: "boot failure", DEADLINE: "deadline", VANISHED: "vanished", COMPLETED: "completed" };
   const label = (s) => STATE_LABEL[s] || s.toLowerCase().replace(/_/g, " ");
 
+  // cluster colours: from the config, else a fixed palette in cluster order
+  const AUTO = ["#4f8f8a", "#e2856c", "#b39a4b", "#a9cbc8", "#3a615b", "#f3c6b6", "#c8b47c", "#073a34"];
+  function clusterColor(name) {
+    const i = snapshot.clusters.findIndex((c) => c.name === name);
+    return (i >= 0 && snapshot.clusters[i].color) || AUTO[Math.max(i, 0) % AUTO.length];
+  }
+  function inkFor(hex) {  // dark or light text on a coloured pill
+    const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || "");
+    if (!m) return "#fff";
+    const [r, g, b] = [1, 2, 3].map((k) => parseInt(m[k], 16) / 255);
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.55 ? "#0d3b38" : "#fbefdc";
+  }
+  const clusterPill = (name) => el("span", { class: "w-cpill", style: `background:${clusterColor(name)};color:${inkFor(clusterColor(name))}` }, name);
+
   // ---------- data ----------
   async function fetchState() {
     try {
@@ -86,9 +100,9 @@
     for (const cl of snapshot.clusters) {
       const n = cl.counts || {};
       const state = cl.ok ? "ok" : cl.error_kind === "login" ? "login" : "err";
-      root.append(el("div", { class: `w-cluster ${state}`, style: `--card-color:${cl.color || "var(--muted)"}`,
+      root.append(el("div", { class: `w-cluster ${state}`, style: `--card-color:${clusterColor(cl.name)}`,
           title: cl.ok ? `polled ${clock(cl.last_success)}` : (cl.error || "not reached") },
-        el("span", { class: "w-cname" }, cl.name),
+        el("span", { class: "w-cname" }, clusterPill(cl.name)),
         cl.ok
           ? el("span", { class: "w-counts" },
               el("b", { class: "running" }, n.running || 0), el("b", { class: "pending" }, n.pending || 0),
@@ -104,8 +118,8 @@
     const al = $("#w-alerts"); al.replaceChildren();
     if (!probs.length) al.append(el("li", { class: "w-empty" }, `nothing crashed in the last ${ALERT_HOURS} h`));
     for (const j of probs.slice(0, 12)) {
-      al.append(el("li", { class: "w-item alert" },
-        el("span", { class: "w-main" }, el("b", {}, j.name), el("span", { class: "w-sub" }, `${j.cluster} · ${j.job_id} · ${fmtWhen(j.end_time)}`)),
+      al.append(el("li", { class: "w-item alert", style: `--card-color:${clusterColor(j.cluster)}` },
+        el("span", { class: "w-main" }, el("b", {}, j.name), el("span", { class: "w-sub" }, clusterPill(j.cluster), ` ${j.job_id} · ${fmtWhen(j.end_time)}`)),
         el("span", { class: "w-tag problem" }, j.exit_summary || label(j.state)),
         el("button", { class: "w-x", title: "dismiss", onclick: () => { dismissed.add(j.key); store("omniqueue.widget.dismissed", [...dismissed]); render(); } }, "✕")));
     }
@@ -127,8 +141,8 @@
     if (!items.length) { ul.append(el("li", { class: "w-empty" }, emptyText)); return; }
     for (const j of items.slice(0, LIMIT)) {
       const [sub, tag] = extra(j);
-      ul.append(el("li", { class: "w-item" },
-        el("span", { class: "w-main" }, el("b", {}, j.name), el("span", { class: "w-sub" }, `${j.cluster} · ${j.job_id} · ${sub}`)), tag));
+      ul.append(el("li", { class: "w-item", style: `--card-color:${clusterColor(j.cluster)}` },
+        el("span", { class: "w-main" }, el("b", {}, j.name), el("span", { class: "w-sub" }, clusterPill(j.cluster), ` ${j.job_id} · ${sub}`)), tag));
     }
   }
 
