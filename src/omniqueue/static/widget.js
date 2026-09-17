@@ -11,6 +11,7 @@
   const pad = (n) => String(n).padStart(2, "0");
 
   let snapshot = null, etag = null, timer = null;
+  let mode = "summary"; // "summary" | "running"
   const CLIENT_ID = "w-" + Math.random().toString(36).slice(2);
   const store = (k, v) => { try { v === undefined ? localStorage.removeItem(k) : localStorage.setItem(k, JSON.stringify(v)); } catch { /* ignore */ } };
   const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
@@ -89,9 +90,36 @@
       .sort((a, b) => (parseT(b.end_time) || 0) - (parseT(a.end_time) || 0));
   }
 
+  // ---------- running mode: every running job with a progress bar ----------
+  function renderRunning() {
+    const ul = $("#w-running-list"); ul.replaceChildren();
+    const running = snapshot.jobs.filter((j) => j.category === "running")
+      .map((j) => ({ j, frac: j.time_limit_s ? Math.min(1, (j.elapsed_s || 0) / j.time_limit_s) : 0 }))
+      .sort((a, b) => b.frac - a.frac || (a.j.time_limit_s || 0) - (b.j.time_limit_s || 0));
+    $("#w-running-count").textContent = running.length ? `${running.length} job${running.length === 1 ? "" : "s"}` : "";
+    if (!running.length) { ul.append(el("li", { class: "w-empty" }, "no running jobs")); return; }
+    for (const { j, frac } of running) {
+      const pct = Math.round(frac * 100);
+      const left = j.time_limit_s ? fmtDur(Math.max(0, j.time_limit_s - (j.elapsed_s || 0))) + " left" : "no limit";
+      ul.append(el("li", { class: "w-item w-run", style: `--card-color:${clusterColor(j.cluster)}` },
+        el("span", { class: "w-main" },
+          el("span", { class: "w-runhead" }, el("b", {}, j.name), el("span", { class: `w-pct ${pct >= 90 ? "hot" : ""}` }, j.time_limit_s ? `${pct}%` : "")),
+          el("span", { class: `w-bar ${pct >= 90 ? "hot" : ""}`, title: `${fmtDur(j.elapsed_s)} of ${fmtDur(j.time_limit_s)}` }, el("i", { style: `width:${pct}%` })),
+          el("span", { class: "w-sub" }, clusterPill(j.cluster), ` ${j.job_id} · ${fmtDur(j.elapsed_s)} / ${fmtDur(j.time_limit_s)} · ${left}${j.nodes ? ` · ${j.nodes} node${j.nodes === 1 ? "" : "s"}` : ""}`))));
+    }
+  }
+  function setMode(m) {
+    mode = m;
+    $("#w-running-block").hidden = mode !== "running";
+    $("#w-summary-blocks").hidden = mode === "running";
+    $("#w-running").classList.toggle("on", mode === "running");
+    if (snapshot) render();
+  }
+
   // ---------- render ----------
   function render() {
     if (!snapshot) return;
+    if (mode === "running") renderRunning();
     const jobs = snapshot.jobs;
     const c = { running: 0, pending: 0, ok: 0, problem: 0 };
     for (const j of jobs) if (c[j.category] !== undefined) c[j.category]++;
@@ -181,6 +209,13 @@
 
   // ---------- wiring ----------
   $("#w-refresh").addEventListener("click", requestRefresh);
+  $("#w-running").addEventListener("click", () => setMode(mode === "running" ? "summary" : "running"));
+  $("#w-running-back").addEventListener("click", () => setMode("summary"));
+  document.addEventListener("keydown", (e) => {
+    if (e.target.matches("input, select, textarea")) return;
+    if (e.key === "r") setMode(mode === "running" ? "summary" : "running");
+    else if (e.key === "q" || e.key === "Escape") setMode("summary");
+  });
   $("#w-clear").addEventListener("click", () => { for (const j of problems()) dismissed.add(j.key); store("omniqueue.widget.dismissed", [...dismissed]); render(); });
   $("#w-notify").addEventListener("click", async () => { if ("Notification" in window && Notification.permission === "default") await Notification.requestPermission(); updateBell(); });
   updateBell();

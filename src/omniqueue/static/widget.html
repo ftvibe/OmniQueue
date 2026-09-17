@@ -14,12 +14,20 @@
   <a href="/" target="omniqueue" title="open the full dashboard"><img class="w-logo" src="/logo.svg" alt="OmniQueue" width="28" height="28"></a>
   <span id="w-summary" class="w-summary">connecting…</span>
   <span class="w-actions">
+    <button id="w-running" title="running jobs with progress bars (r); q returns">▶</button>
     <button id="w-refresh" title="poll the clusters now">↻</button>
     <button id="w-notify" title="browser notifications for crashed / timed-out jobs">🔔</button>
   </span>
 </header>
 
 <section id="w-clusters" class="w-clusters" aria-label="Clusters"></section>
+
+<section class="w-block" id="w-running-block" hidden>
+  <h2>Running <span id="w-running-count" class="w-count"></span><button id="w-running-back" class="w-link" title="back to the summary (q)">← summary</button></h2>
+  <ul id="w-running-list" class="w-list"></ul>
+</section>
+
+<div id="w-summary-blocks">
 
 <section class="w-block" id="w-alerts-block">
   <h2>Alerts <span id="w-alerts-count" class="w-count"></span><button id="w-clear" class="w-link" title="dismiss all alerts">clear</button></h2>
@@ -35,6 +43,8 @@
   <h2>Recently finished <span id="w-finished-count" class="w-count"></span></h2>
   <ul id="w-finished" class="w-list"></ul>
 </section>
+
+</div>
 
 <footer class="w-foot"><span id="w-status"></span></footer>
 <script src="/widget.js"></script>

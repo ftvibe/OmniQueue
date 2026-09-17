@@ -237,6 +237,11 @@ last 48 h (dismiss them one by one or all at once), then the most recently
 started jobs with elapsed time against their limit and the most recently
 finished ones with how long they took.
 
+Press `r` (or the ▶ button) for the **running mode**: every running job with
+a progress bar of elapsed time against its limit, the ones closest to their
+limit first, turning coral past 90 %. `r` again, `q` or Esc returns to the
+summary.
+
 The widget re-reads the server every 10 minutes, and not at all while hidden.
 The server polls the clusters as often as the fastest page watching it needs:
 with only the widget open that is the widget's 10 minutes, as soon as a

@@ -255,3 +255,10 @@ body.widget { font-size: 13px; }
 .w-x:hover { color: var(--problem); }
 .w-empty { color: var(--muted); font-size: 12px; padding: 4px 2px; }
 .w-foot { padding: 8px 12px 14px; color: var(--muted); font-size: 11px; }
+.w-run .w-main { gap: 3px; }
+.w-runhead { display: flex; justify-content: space-between; gap: 8px; }
+.w-pct { font-family: var(--mono); font-size: 11px; color: var(--ink-2); }
+.w-pct.hot { color: var(--problem); font-weight: 700; }
+.w-bar { display: block; height: 8px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
+.w-bar i { display: block; height: 100%; background: var(--running); border-radius: 4px; }
+.w-bar.hot i { background: var(--problem); }
