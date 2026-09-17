@@ -53,6 +53,11 @@
     if (sameDay) return hm;
     return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hm}`;
   }
+  function clock(unix) {
+    if (!unix) return "never";
+    const d = new Date(unix * 1000);
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  }
   function ago(unix) {
     if (!unix) return "never";
     const s = Math.round(Date.now() / 1000 - unix);
@@ -143,12 +148,16 @@
     try {
       const res = await fetch("/api/state", { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      state.snapshot = await res.json();
+      const snap = await res.json();
+      const changed = !state.snapshot || snap.last_refresh !== state.snapshot.last_refresh
+        || snap.refreshing !== state.snapshot.refreshing || state.error;
+      state.snapshot = snap;
       state.error = null;
+      if (changed) render(); else renderHeader();
     } catch (err) {
       state.error = `dashboard cannot reach the OmniQueue server (${err.message})`;
+      render();
     }
-    render();
   }
   async function requestRefresh() {
     try { await fetch("/api/refresh", { method: "POST" }); } catch { /* shown on next poll */ }
@@ -166,8 +175,8 @@
     const c = state.snapshot?.clusters.find((x) => x.name === name);
     return c?.color || autoColor(name);
   }
-  // Solarized accents in a fixed order: blue, orange, green, violet, magenta, cyan, yellow, red
-  const AUTO = ["#268bd2", "#cb4b16", "#859900", "#6c71c4", "#d33682", "#2aa198", "#b58900", "#dc322f"];
+  // fixed order: teal, coral, mustard, arctic, spruce, blush, sage, peacock
+  const AUTO = ["#4f8f8a", "#e2856c", "#b39a4b", "#a9cbc8", "#3a615b", "#f3c6b6", "#c8b47c", "#073a34"];
   const autoIndex = new Map();
   function autoColor(name) {
     if (!autoIndex.has(name)) autoIndex.set(name, autoIndex.size);
@@ -242,7 +251,7 @@
     const okClusters = snap.clusters.filter((c) => c.ok).length;
     line.textContent = `${okClusters}/${snap.clusters.length} clusters · ${counts.running} running · ${counts.pending} pending · ${counts.problem} failed`;
     rs.classList.toggle("spin", !!snap.refreshing);
-    rs.textContent = snap.refreshing ? "refreshing…" : `polled ${ago(snap.last_refresh)} · every ${snap.refresh_seconds}s`;
+    rs.textContent = snap.refreshing ? "refreshing…" : `polled ${clock(snap.last_refresh)} · every ${snap.refresh_seconds}s`;
     $("#footer-note").textContent = state.error
       ? state.error
       : `finished jobs come from sacct (last ${snap.lookback_hours} h) plus the local history; times are shown as the cluster reports them.`;
@@ -262,13 +271,13 @@
         title: hidden ? "click to show this cluster's jobs" : "click to hide this cluster's jobs",
         onclick: () => { hidden ? state.hiddenClusters.delete(c.name) : state.hiddenClusters.add(c.name); savePrefs(); render(); },
       },
-        el("div", { class: "card-head" }, el("b", {}, c.name), el("small", {}, c.host)),
+        el("div", { class: "card-head" }, logoEl(c), el("b", {}, c.name), el("small", {}, c.host)),
         el("div", { class: "card-counts" },
-          ...["running", "pending", "problem", "ok"].map((k) =>
-            el("span", { class: `pill ${k}`, title: k }, `${counts[k] || 0} ${k === "ok" ? "done" : k === "problem" ? "failed" : k}`)),
+          ...[["running", "running"], ["pending", "pending"], ["problem", "failed"], ["ok", "done"]].map(([k, label]) =>
+            el("span", { class: `pill ${k}`, title: label }, el("b", {}, counts[k] || 0), label)),
         ),
         el("div", { class: "card-foot" },
-          el("span", {}, c.ok ? `polled ${ago(c.last_success)}` : c.last_success ? `last ok ${ago(c.last_success)}` : "never reached"),
+          el("span", {}, c.ok ? `polled ${clock(c.last_success)}` : c.last_success ? `last ok ${clock(c.last_success)}` : "never reached"),
           el("span", {}, c.poll_seconds != null ? `${c.poll_seconds.toFixed(1)}s` : ""),
         ),
         c.error ? el("div", { class: "card-error" }, `⚠ ${c.error}`) : null,
@@ -276,6 +285,20 @@
       );
       root.append(card);
     }
+  }
+
+  function logoEl(c) {
+    if (c.logo) {
+      const img = el("img", { class: "card-logo", src: c.logo, alt: "" });
+      img.addEventListener("error", () => img.replaceWith(initialsEl(c)), { once: true });
+      return img;
+    }
+    return initialsEl(c);
+  }
+  function initialsEl(c) {
+    const parts = c.name.split(/[^a-z0-9]+/i).filter(Boolean);
+    const text = (parts.length > 1 ? parts[0][0] + parts[1][0] : c.name.slice(0, 2)).toUpperCase();
+    return el("span", { class: "card-logo initials", "aria-hidden": "true" }, text);
   }
 
   function renderTabs() {
@@ -330,13 +353,11 @@
 
   function elapsedCell(j) {
     if (j.category !== "running" || !j.time_limit_s) return fmtDuration(j.elapsed_s);
-    // running jobs age between polls: extrapolate from last_seen
-    const live = (j.elapsed_s || 0) + Math.max(0, Date.now() / 1000 - j.last_seen);
-    const frac = Math.min(1, live / j.time_limit_s);
+    const frac = Math.min(1, (j.elapsed_s || 0) / j.time_limit_s);
     return el("span", {},
       el("span", { class: "bar " + (frac > 0.9 ? "hot" : ""), title: `${Math.round(frac * 100)}% of time limit used` },
         el("i", { style: `width:${(frac * 100).toFixed(1)}%` }),
-        el("span", {}, fmtDuration(live))));
+        el("span", {}, fmtDuration(j.elapsed_s))));
   }
 
   // ---------- drawer ----------
@@ -419,5 +440,4 @@
 
   fetchState();
   setInterval(fetchState, POLL_MS);
-  setInterval(() => { if (state.snapshot) { renderHeader(); renderTable(); } }, 1000); // live elapsed counters
 })();

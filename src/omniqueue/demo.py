@@ -81,12 +81,22 @@ class DemoCollector(Collector):
 
 
 def demo_config() -> Config:
+    import tempfile
+    from pathlib import Path
+
+    logo_dir = Path(tempfile.gettempdir()) / "omniqueue-demo-logos"
+    logo_dir.mkdir(exist_ok=True)
+    (logo_dir / "lumi.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" fill="#053229"/>'
+        '<path d="M12 27 20 11l8 16z" fill="#8fb8b4"/><circle cx="20" cy="24" r="3" fill="#e2856c"/></svg>'
+    )
     return Config(
+        logo_dir=logo_dir,
         clusters=[
-            ClusterConfig(name="tetralith", host="tetralith.nsc.liu.se", color="#268bd2"),
-            ClusterConfig(name="dardel", host="dardel.pdc.kth.se", color="#cb4b16"),
-            ClusterConfig(name="lumi", host="lumi.csc.fi", color="#859900"),
-            ClusterConfig(name="offline-cluster", host="unreachable.example.org", color="#6c71c4"),
+            ClusterConfig(name="tetralith", host="tetralith.nsc.liu.se", color="#5f9e99"),
+            ClusterConfig(name="dardel", host="dardel.pdc.kth.se", color="#e2856c"),
+            ClusterConfig(name="lumi", host="lumi.csc.fi", color="#b39a4b"),
+            ClusterConfig(name="offline-cluster", host="unreachable.example.org", color="#8fb8b4"),
         ],
         refresh_seconds=30,
     )

@@ -49,6 +49,23 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(status, 200, path)
             self.assertIn(needle, body)
 
+    def test_logo(self):
+        # demo config ships an svg logo for "lumi" and none for the others
+        status, ctype, body = self.get("/logo/lumi")
+        self.assertEqual(status, 200)
+        self.assertIn("image/svg", ctype)
+        self.assertIn(b"<svg", body)
+        snap = json.loads(self.get("/api/state")[2])
+        by_name = {c["name"]: c for c in snap["clusters"]}
+        self.assertEqual(by_name["lumi"]["logo"], "/logo/lumi")
+        self.assertIsNone(by_name["dardel"]["logo"])
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            self.get("/logo/dardel")
+        self.assertEqual(cm.exception.code, 404)
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            self.get("/logo/../../etc/passwd")
+        self.assertEqual(cm.exception.code, 404)
+
     def test_404(self):
         with self.assertRaises(urllib.error.HTTPError) as cm:
             self.get("/../pyproject.toml")

@@ -54,7 +54,8 @@ host = "tetralith"          # anything ssh accepts, aliases from ~/.ssh/config i
 # squeue_args = ["--partition=main"]
 # sacct_args  = ["--account=naiss2024-1-23"]
 # use_sacct = false         # for clusters without job accounting
-# color = "#268bd2"         # accent colour in the dashboard
+# color = "#5f9e99"         # accent colour in the dashboard
+# logo = "~/Pictures/nsc.png" # or drop <name>.svg/.png into ~/.config/omniqueue/logos/
 
 [[clusters]]
 name = "dardel"
@@ -100,21 +101,28 @@ an agent are then required). The sockets live in `~/.local/share/omniqueue/ssh/`
 
 ## The dashboard
 
-* **Cluster cards** show running / pending / failed / done counts, when the
-  cluster was last reached, and the ssh or Slurm error if it was not. Click a
-  card to hide or show that cluster's jobs.
-* **Tabs** filter by category. The search box is fuzzy, fzf-style: `vsp13`
+* **Cluster cards** show running / pending / failed / done counts, the time of
+  the last successful poll, and the ssh or Slurm error if the cluster could not
+  be reached. Click a card to hide or show that cluster's jobs.
+* **Logos**: drop `<cluster name>.svg` (or `.png`, `.jpg`, `.webp`) into
+  `~/.config/omniqueue/logos/` and it appears on the card, or set
+  `logo = "path-or-https-url"` in the cluster entry. Without one, the card shows
+  the cluster's initials in its accent colour.
+* Nothing on the page ticks between polls: elapsed times and timestamps are
+  those of the last poll, so the layout stays still.
+* **Tabs** filter by category. The search box matches loosely: `vsp13`
   finds `vasp-relax-13`, `6195` finds job `619506`. Matched characters are
   highlighted and results are ranked by match quality while you type.
   Several space-separated terms must all match; node list, reason, partition,
   account and work directory are searched too (plain substring).
-* **Running jobs** show a live elapsed counter and a bar of the time limit used.
-  The bar turns red past 90 %.
+* **Running jobs** show the elapsed time at the last poll and a bar of the time
+  limit used. The bar turns coral past 90 %.
 * **Failed jobs** carry a note such as `exit code 1`, `hit time limit`,
   `out of memory` or `cancelled by uid 1234`.
 * Click a row for all details (queue wait, node list, work dir, exit code, ...).
   Finished jobs can be removed from the local history from there.
-* Solarized colours, dark and light. The ◐ button (or `t`) cycles auto / dark / light.
+* Muted teal / coral / mustard palette, dark and light; failed and done never
+  rely on a red-green pair. The ◐ button (or `t`) cycles auto / dark / light.
 * Keys: `/` search, `r` refresh now, `t` theme, `1`-`5` tabs, `Esc` close.
 
 Only the dashboard's own machine can reach it (`listen_host = "127.0.0.1"`).

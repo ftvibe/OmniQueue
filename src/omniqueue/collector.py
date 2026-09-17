@@ -29,6 +29,7 @@ class ClusterStatus:
     last_success: float | None = None
     poll_seconds: float | None = None
     color: str | None = None
+    logo: str | None = None  # URL the dashboard can load
     counts: dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -42,7 +43,7 @@ class Collector:
         self._lock = threading.Lock()
         self._jobs: dict[str, list[Job]] = {}
         self._status: dict[str, ClusterStatus] = {
-            c.name: ClusterStatus(name=c.name, host=c.host or "local", color=c.color)
+            c.name: ClusterStatus(name=c.name, host=c.host or "local", color=c.color, logo=self._logo_url(c))
             for c in config.enabled_clusters
         }
         self._wake = threading.Event()
@@ -50,6 +51,22 @@ class Collector:
         self._thread: threading.Thread | None = None
         self.last_refresh: float | None = None
         self.refreshing = False
+
+    def _logo_url(self, cluster: ClusterConfig) -> str | None:
+        src = self.config.logo_source(cluster)
+        if src is None:
+            return None
+        if src.startswith(("http://", "https://")):
+            return src
+        return f"/logo/{cluster.name}"
+
+    def logo_path(self, name: str) -> str | None:
+        """Local file backing ``/logo/<name>``, or None."""
+        for c in self.config.enabled_clusters:
+            if c.name == name:
+                src = self.config.logo_source(c)
+                return None if src is None or src.startswith(("http://", "https://")) else src
+        return None
 
     # -- one cluster -----------------------------------------------------------
     def poll_cluster(self, cluster: ClusterConfig) -> tuple[list[Job], ClusterStatus]:

@@ -47,6 +47,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/health":
             self._json({"ok": True})
             return
+        if path.startswith("/logo/"):
+            self._logo(path[len("/logo/"):])
+            return
         name = path.lstrip("/") or "index.html"
         if name in STATIC_FILES:
             ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
@@ -56,6 +59,27 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": "missing static file"}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
         self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+
+    def _logo(self, name: str) -> None:
+        from urllib.parse import unquote
+
+        file_path = self.collector.logo_path(unquote(name))
+        if not file_path:
+            self._json({"error": "no logo"}, HTTPStatus.NOT_FOUND)
+            return
+        try:
+            with open(file_path, "rb") as fh:
+                body = fh.read()
+        except OSError:
+            self._json({"error": "unreadable logo"}, HTTPStatus.NOT_FOUND)
+            return
+        ctype = mimetypes.guess_type(file_path)[0] or "application/octet-stream"
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "max-age=3600")
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
