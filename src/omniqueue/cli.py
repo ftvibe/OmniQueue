@@ -117,15 +117,17 @@ def cmd_login(args) -> int:
         if c.is_local:
             continue
         if args.close:
-            close_connection(c, cfg)
-            print(f"{c.name}: connection closed")
+            print(f"{c.name}: {close_connection(c, cfg)}")
             continue
         if connection_alive(c, cfg) and not args.force:
             print(f"{c.name}: connection already open")
             continue
-        print(f"{c.name}: connecting to {c.host} ...")
+        print(f"{c.name}: connecting to {c.host} ...  (Ctrl-C cancels)")
         r = login(c, cfg)
-        print(f"{c.name}: {'connected, master will stay open' if r == 0 else f'ssh exited {r}'}")
+        if r == 130:
+            print(f"{c.name}: cancelled")
+            return 130
+        print(f"{c.name}: {'connected, connection stays open' if r == 0 else f'ssh exited {r}'}")
         rc = rc or r
     return rc
 
@@ -234,6 +236,9 @@ def main(argv: list[str] | None = None) -> int:
                         format="%(asctime)s %(name)s %(levelname)s %(message)s")
     try:
         return args.func(args)
+    except KeyboardInterrupt:
+        print("\ncancelled", file=sys.stderr)
+        return 130
     except ConfigError as exc:
         print(f"config error: {exc}", file=sys.stderr)
         return 2

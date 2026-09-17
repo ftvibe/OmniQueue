@@ -91,6 +91,12 @@ omniqueue logout dardel    # close one
 ```
 
 You type the password/OTP once; the poller reuses that connection afterwards.
+Ctrl-C during `login` cancels the attempt cleanly. `logout` first asks the
+master to exit; a master hung on a dead link ignores that, so it is then
+killed and its socket removed, and `login` does the same clean-up before
+connecting if it finds a dead socket. Your own `ssh host` in a terminal does
+not share these connections: OmniQueue keeps its sockets under
+`~/.local/share/omniqueue/ssh/`, separate from anything in `~/.ssh/config`.
 Set `persist_connections = false` to fall back to a fresh ssh per poll (keys or
 an agent are then required). The sockets live in `~/.local/share/omniqueue/ssh/`.
 

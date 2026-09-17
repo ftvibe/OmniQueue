@@ -38,14 +38,15 @@ class CombinedCommandTests(unittest.TestCase):
 class SshArgvTests(unittest.TestCase):
     def test_control_master_options(self):
         with tempfile.TemporaryDirectory() as tmp:
-            cfg = Config(clusters=[ClusterConfig(name="c", host="c.example")], data_dir=Path(tmp), persist_seconds=60)
-            opts = control_options(cfg)
+            cfg = Config(clusters=[ClusterConfig(name="c one", host="c.example")], data_dir=Path(tmp), persist_seconds=60)
+            c = cfg.clusters[0]
+            opts = control_options(cfg, c)
             self.assertIn("ControlMaster=auto", opts)
             self.assertIn("ControlPersist=60", opts)
-            self.assertTrue(any(o.startswith(f"ControlPath={tmp}/ssh/cm-") for o in opts))
+            self.assertIn(f"ControlPath={tmp}/ssh/cm-c_one", opts)  # named after the cluster
             self.assertEqual(stat.S_IMODE(os.stat(Path(tmp) / "ssh").st_mode), 0o700)
             cfg.persist_connections = False
-            self.assertFalse(any(o.startswith("Control") for o in control_options(cfg)))
+            self.assertFalse(any(o.startswith("Control") for o in control_options(cfg, c)))
 
     def test_argv(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -128,6 +129,35 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class CloseConnectionTests(unittest.TestCase):
+    def test_stale_socket_is_removed_and_master_killed(self):
+        from omniqueue import ssh as ssh_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Config(clusters=[ClusterConfig(name="far", host="far.example")], data_dir=Path(tmp))
+            c = cfg.clusters[0]
+            self.assertEqual(ssh_mod.close_connection(c, cfg), "not open")
+            sock = ssh_mod.socket_path(c, cfg)
+            sock.write_text("")  # pretend a master left its socket behind
+            calls = []
+
+            def fake_run(argv, **kw):
+                calls.append(argv)
+                return mock.Mock(returncode=0 if argv[0] == "pkill" else 1)
+
+            with mock.patch.object(ssh_mod.subprocess, "run", side_effect=fake_run), \
+                 mock.patch.object(ssh_mod.time, "sleep"):
+                self.assertEqual(ssh_mod.close_connection(c, cfg), "killed")
+            self.assertFalse(sock.exists())
+            self.assertEqual(calls[0][:3], ["ssh", "-O", "exit"])
+            self.assertEqual(calls[1][:2], ["pkill", "-f"])
+            self.assertEqual(calls[1][2], str(sock))
+            # no socket -> alive check does not even spawn ssh
+            with mock.patch.object(ssh_mod.subprocess, "run") as run:
+                self.assertFalse(ssh_mod.connection_alive(c, cfg))
+                run.assert_not_called()
+
+
 class ResilienceTests(unittest.TestCase):
     def test_classify_error(self):
         from omniqueue.ssh import classify_error
@@ -144,7 +174,7 @@ class ResilienceTests(unittest.TestCase):
             cfg = Config(clusters=[ClusterConfig(name="c", host="c")], data_dir=Path(tmp), keepalive_seconds=7)
             for persist in (True, False):
                 cfg.persist_connections = persist
-                opts = control_options(cfg)
+                opts = control_options(cfg, cfg.clusters[0])
                 self.assertIn("ServerAliveInterval=7", opts)
                 self.assertIn("ServerAliveCountMax=3", opts)
                 self.assertEqual("ControlMaster=auto" in opts, persist)

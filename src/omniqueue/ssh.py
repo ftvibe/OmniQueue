@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -55,7 +56,13 @@ def control_socket_dir(config: Config) -> Path:
     return secure_dir(config.data_dir / "ssh")
 
 
-def control_options(config: Config) -> list[str]:
+def socket_path(cluster: ClusterConfig, config: Config) -> Path:
+    """The master socket for one cluster, named after the cluster so it can be found again."""
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", cluster.name)
+    return control_socket_dir(config) / f"cm-{safe}"
+
+
+def control_options(config: Config, cluster: ClusterConfig | None = None) -> list[str]:
     """ssh options that reuse one master connection per cluster between polls.
 
     The first ssh to a cluster becomes the master and stays in the background
@@ -70,9 +77,9 @@ def control_options(config: Config) -> list[str]:
         "-o", "ServerAliveCountMax=3",
         "-o", "TCPKeepAlive=yes",
     ]
-    if not config.persist_connections:
+    if not config.persist_connections or cluster is None:
         return opts
-    sock = control_socket_dir(config) / "cm-%C"  # %C = hash of user@host:port
+    sock = socket_path(cluster, config)
     return opts + [
         "-o", "ControlMaster=auto",
         "-o", f"ControlPath={sock}",
@@ -104,7 +111,7 @@ def build_ssh_argv(
     if batch:
         argv += ["-o", "BatchMode=yes", "-T"]  # never hang on a password prompt
     if config is not None:
-        argv += control_options(config)
+        argv += control_options(config, cluster)
     if cluster.user:
         argv += ["-l", cluster.user]  # the account on that cluster: ssh login and Slurm user alike
     argv += cluster.ssh_options
@@ -122,29 +129,69 @@ def login(cluster: ClusterConfig, config: Config) -> int:
     """
     if cluster.is_local:
         return 0
+    if config.persist_connections and socket_path(cluster, config).exists() and not connection_alive(cluster, config):
+        close_connection(cluster, config)  # a stale or hung master would otherwise be reused
     argv = build_ssh_argv(cluster, "true", config.ssh_timeout, config, batch=False)
-    return subprocess.call(argv)
+    proc = subprocess.Popen(argv)
+    try:
+        return proc.wait()
+    except KeyboardInterrupt:
+        proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        # a master that got as far as forking must not survive a cancelled login
+        close_connection(cluster, config)
+        return 130
+
+
+def _mux(cluster: ClusterConfig, config: Config, command: str) -> list[str]:
+    return (["ssh", "-O", command] + control_options(config, cluster) + _user_args(cluster)
+            + cluster.ssh_options + ["--", cluster.host or ""])
 
 
 def connection_alive(cluster: ClusterConfig, config: Config) -> bool:
-    """True when a master connection for this cluster is currently open."""
-    if cluster.is_local or not config.persist_connections:
+    """True when a master connection for this cluster is open and answering."""
+    if cluster.is_local or not config.persist_connections or not socket_path(cluster, config).exists():
         return False
-    argv = ["ssh", "-O", "check"] + control_options(config) + _user_args(cluster) + cluster.ssh_options + ["--", cluster.host or ""]
     try:
-        return subprocess.run(argv, capture_output=True, timeout=10).returncode == 0
+        return subprocess.run(_mux(cluster, config, "check"), capture_output=True, timeout=5).returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         return False
 
 
-def close_connection(cluster: ClusterConfig, config: Config) -> None:
+def close_connection(cluster: ClusterConfig, config: Config) -> str:
+    """Close the master for this cluster; returns what happened.
+
+    Asks the master to exit over its socket first. A master hung on a dead link
+    ignores that, so the master process is then killed by its socket path
+    (OpenSSH puts the ControlPath in the mux process title) and the socket file
+    is removed, so the next connection starts fresh.
+    """
     if cluster.is_local or not config.persist_connections:
-        return
-    argv = ["ssh", "-O", "exit"] + control_options(config) + _user_args(cluster) + cluster.ssh_options + ["--", cluster.host or ""]
+        return "n/a"
+    sock = socket_path(cluster, config)
+    if not sock.exists():
+        return "not open"
     try:
-        subprocess.run(argv, capture_output=True, timeout=10)
+        subprocess.run(_mux(cluster, config, "exit"), capture_output=True, timeout=5)
     except (OSError, subprocess.TimeoutExpired):
         pass
+    for _ in range(10):  # give the master a moment to remove its socket
+        if not sock.exists():
+            return "closed"
+        time.sleep(0.1)
+    killed = False
+    try:
+        killed = subprocess.run(["pkill", "-f", str(sock)], capture_output=True, timeout=5).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    try:
+        sock.unlink()
+    except OSError:
+        pass
+    return "killed" if killed else "stale socket removed"
 
 
 def run_on_cluster(
