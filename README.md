@@ -24,14 +24,14 @@ and a working `ssh`.
 pip install -e .            # or: pipx install .
 omniqueue init              # writes ~/.config/omniqueue/config.toml
 $EDITOR ~/.config/omniqueue/config.toml
-omniqueue check             # try to reach every cluster once
-omniqueue serve --open      # start polling and open http://127.0.0.1:8765/
+omniqueue login             # open one ssh connection per cluster (password / 2FA ok)
+omniqueue monitor           # start polling and open http://127.0.0.1:8765/
 ```
 
 Try it without any cluster access:
 
 ```sh
-omniqueue --demo serve --open
+omniqueue --demo monitor
 ```
 
 ## Configuration
@@ -62,24 +62,36 @@ host = "dardel.pdc.kth.se"
 user = "flotr"
 ```
 
-ssh runs in batch mode, so it never prompts for a password: use keys, an agent,
-or a `ControlMaster` connection you opened beforehand. Two-factor logins work if
-you keep a master connection alive, e.g. in `~/.ssh/config`:
+## ssh connections
 
-```
-Host dardel.pdc.kth.se
-    ControlMaster auto
-    ControlPath ~/.ssh/cm-%r@%h:%p
-    ControlPersist 8h
+OmniQueue does not keep its own streams open. Instead it relies on ssh
+connection multiplexing (`ControlMaster`): the first connection to a cluster
+becomes a *master* that stays in the background, and every later poll is a
+cheap new session over that existing connection, with no TCP handshake, key
+exchange or login prompt. The master closes itself after `persist_seconds`
+(default 8 h) without use. One poll is exactly one ssh session per cluster:
+`squeue` and `sacct` run in the same remote shell.
+
+Polls run ssh in batch mode and never prompt. If a cluster needs a password or
+a one-time code, open the master by hand first:
+
+```sh
+omniqueue login            # all clusters that are not connected yet
+omniqueue login dardel     # just one
+omniqueue login --close    # tear the connections down
 ```
 
-and log in once by hand.
+You type the password/OTP once; the poller reuses that connection afterwards.
+Set `persist_connections = false` to fall back to a fresh ssh per poll (keys or
+an agent are then required). The sockets live in `~/.local/share/omniqueue/ssh/`.
 
 ## Commands
 
 | command | what it does |
 |---|---|
-| `omniqueue serve [--open] [--port N]` | poll all clusters in the background and serve the dashboard |
+| `omniqueue monitor [--port N]` | poll all clusters in the background, serve the dashboard and open it |
+| `omniqueue serve [--open]` | the same without opening a browser (for a headless machine) |
+| `omniqueue login [CLUSTER...] [--close]` | open (or close) the persistent ssh connection, allowing password / 2FA |
 | `omniqueue list [--state running] ...` | poll once and print a table to the terminal |
 | `omniqueue check` | connect to every cluster once and report problems |
 | `omniqueue init [--force]` | write the example config |
@@ -110,11 +122,11 @@ If you run OmniQueue on a remote machine, forward the port with
 
 ## How data is gathered
 
-Per poll and per cluster, OmniQueue runs:
+Per poll and per cluster, OmniQueue runs one remote shell command:
 
 ```
-squeue --noheader --array --user="$USER" --format='%i|%T|...|%j'
-sacct  --noheader --parsable2 --allocations --user="$USER" --starttime=<now - lookback> --format=JobID,State,...,JobName
+squeue --noheader --array --user="$USER" --format='%i|%T|...|%j'; echo "@@OMNIQUEUE squeue rc=$?"; \
+sacct  --noheader --parsable2 --allocations --user="$USER" --starttime=<now - lookback> --format=JobID,State,...,JobName; echo "@@OMNIQUEUE sacct rc=$?"
 ```
 
 `squeue` is authoritative for anything it lists; `sacct` supplies finished jobs

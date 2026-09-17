@@ -83,6 +83,38 @@ def sacct_command(user: str | None, lookback_hours: int, extra_args: list[str] |
     return " ".join(parts)
 
 
+MARK = "@@OMNIQUEUE"
+
+
+def combined_command(user: str | None, lookback_hours: int, squeue_args: list[str] | None,
+                     sacct_args: list[str] | None, use_sacct: bool) -> str:
+    """squeue and sacct in one remote shell invocation, so a poll costs one ssh round trip.
+
+    Each command is followed by a marker line carrying its exit status.
+    """
+    parts = [squeue_command(user, squeue_args), f'echo "{MARK} squeue rc=$?"']
+    if use_sacct:
+        parts += [sacct_command(user, lookback_hours, sacct_args), f'echo "{MARK} sacct rc=$?"']
+    return "; ".join(parts)
+
+
+_MARK_RE = re.compile(rf"^{re.escape(MARK)} (?P<name>\w+) rc=(?P<rc>\d+)\s*$")
+
+
+def split_combined_output(stdout: str) -> dict[str, tuple[str, int]]:
+    """Split the combined command's stdout into ``{name: (output, exit_code)}``."""
+    sections: dict[str, tuple[str, int]] = {}
+    buf: list[str] = []
+    for line in stdout.splitlines():
+        m = _MARK_RE.match(line)
+        if m:
+            sections[m.group("name")] = ("\n".join(buf), int(m.group("rc")))
+            buf = []
+        else:
+            buf.append(line)
+    return sections
+
+
 _DURATION_RE = re.compile(r"^(?:(?P<days>\d+)-)?(?:(?P<h>\d+):)?(?P<m>\d+):(?P<s>\d+)(?:\.\d+)?$")
 
 

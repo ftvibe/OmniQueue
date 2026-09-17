@@ -12,7 +12,7 @@ from typing import Any
 from .config import ClusterConfig, Config
 from .history import HistoryStore
 from .models import Job
-from .slurm import merge_jobs, parse_sacct, parse_squeue, sacct_command, squeue_command
+from .slurm import combined_command, merge_jobs, parse_sacct, parse_squeue, split_combined_output
 from .ssh import RemoteError, run_on_cluster
 
 log = logging.getLogger("omniqueue.collector")
@@ -58,22 +58,27 @@ class Collector:
         t0 = time.monotonic()
         warnings: list[str] = []
         try:
-            sq = run_on_cluster(cluster, squeue_command(cluster.user, cluster.squeue_args), self.config.ssh_timeout)
-            if sq.returncode != 0:
-                raise RemoteError(f"squeue exited {sq.returncode}: {sq.stderr.strip()[:300]}")
-            squeue_jobs = parse_squeue(sq.stdout, cluster.name)
+            cmd = combined_command(cluster.user, self.config.lookback_hours, cluster.squeue_args,
+                                   cluster.sacct_args, cluster.use_sacct)
+            res = run_on_cluster(cluster, cmd, self.config.ssh_timeout, self.config)
+            sections = split_combined_output(res.stdout)
+            stderr = res.stderr.strip()
+            if "squeue" not in sections:
+                raise RemoteError(f"no squeue output (exit {res.returncode}): {stderr[:300] or 'empty reply'}")
+            sq_out, sq_rc = sections["squeue"]
+            if sq_rc != 0:
+                raise RemoteError(f"squeue exited {sq_rc}: {stderr[:300]}")
+            squeue_jobs = parse_squeue(sq_out, cluster.name)
 
             sacct_jobs: list[Job] = []
             if cluster.use_sacct:
-                sa = run_on_cluster(
-                    cluster,
-                    sacct_command(cluster.user, self.config.lookback_hours, cluster.sacct_args),
-                    self.config.ssh_timeout,
-                )
-                if sa.returncode != 0:
-                    warnings.append(f"sacct exited {sa.returncode}: {sa.stderr.strip()[:200]}")
+                sa_out, sa_rc = sections.get("sacct", ("", -1))
+                if sa_rc != 0:
+                    warnings.append(f"sacct exited {sa_rc}: {stderr[:200]}")
                 else:
-                    sacct_jobs = parse_sacct(sa.stdout, cluster.name)
+                    sacct_jobs = parse_sacct(sa_out, cluster.name)
+            elif stderr:
+                warnings.append(stderr[:200])
         except RemoteError as exc:
             status.ok = False
             status.error = str(exc)

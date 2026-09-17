@@ -42,6 +42,8 @@ class Config:
     lookback_hours: int = 72  # how far back sacct is asked for finished jobs
     history_days: int = 30  # how long finished jobs stay in the local store
     ssh_timeout: int = 20
+    persist_connections: bool = True  # keep one ssh master connection per cluster open between polls
+    persist_seconds: int = 8 * 3600  # how long an idle master connection stays open
     listen_host: str = "127.0.0.1"
     listen_port: int = 8765
     data_dir: Path = field(default_factory=default_data_dir)
@@ -61,6 +63,8 @@ refresh_seconds = 60      # how often every cluster is polled
 lookback_hours  = 72      # how far back sacct is asked for finished jobs
 history_days    = 30      # finished jobs stay in the local history this long
 ssh_timeout     = 20      # seconds before a hanging ssh is given up on
+persist_connections = true   # keep one ssh connection per cluster open between polls
+persist_seconds = 28800      # ... for this long after the last poll (8 h)
 listen_host     = "127.0.0.1"
 listen_port     = 8765
 
@@ -123,12 +127,14 @@ def config_from_dict(raw: dict) -> Config:
         clusters.append(ClusterConfig(**c))
 
     cfg = Config(clusters=clusters)
-    for key in ("refresh_seconds", "lookback_hours", "history_days", "ssh_timeout", "listen_port"):
+    for key in ("refresh_seconds", "lookback_hours", "history_days", "ssh_timeout", "listen_port", "persist_seconds"):
         if key in raw:
             try:
                 setattr(cfg, key, int(raw[key]))
             except (TypeError, ValueError) as exc:
                 raise ConfigError(f"`{key}` must be an integer.") from exc
+    if "persist_connections" in raw:
+        cfg.persist_connections = bool(raw["persist_connections"])
     if "listen_host" in raw:
         cfg.listen_host = str(raw["listen_host"])
     if "data_dir" in raw:

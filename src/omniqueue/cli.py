@@ -17,6 +17,7 @@ from .history import HistoryStore
 from .models import Job
 from .server import make_server
 from .slurm import describe_exit
+from .ssh import close_connection, connection_alive, login
 
 
 def fmt_duration(seconds: int | None) -> str:
@@ -70,6 +71,11 @@ def cmd_serve(args) -> int:
     print(f"OmniQueue {__version__} watching {names}\nDashboard: {url}  (Ctrl-C to stop)")
     if args.open:
         threading.Timer(0.5, webbrowser.open, args=(url,)).start()
+    if cfg.persist_connections and not getattr(args, "demo", False):
+        cold = [c.name for c in cfg.enabled_clusters if not c.is_local and not connection_alive(c, cfg)]
+        if cold:
+            print(f"no open ssh connection yet for: {', '.join(cold)} (first poll opens one; "
+                  f"if a password or 2FA code is needed run `omniqueue login` first)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -78,6 +84,37 @@ def cmd_serve(args) -> int:
         collector.stop()
         server.server_close()
     return 0
+
+
+def cmd_login(args) -> int:
+    """Open (or re-open) the persistent ssh connection to clusters interactively."""
+    cfg = _load(args)
+    if not cfg.persist_connections:
+        print("persist_connections is false in the config; nothing to keep open.", file=sys.stderr)
+        return 2
+    wanted = set(args.cluster or [])
+    unknown = wanted - {c.name for c in cfg.clusters}
+    if unknown:
+        print(f"unknown cluster(s): {', '.join(sorted(unknown))}", file=sys.stderr)
+        return 2
+    rc = 0
+    for c in cfg.enabled_clusters:
+        if wanted and c.name not in wanted:
+            continue
+        if c.is_local:
+            continue
+        if args.close:
+            close_connection(c, cfg)
+            print(f"{c.name}: connection closed")
+            continue
+        if connection_alive(c, cfg) and not args.force:
+            print(f"{c.name}: connection already open")
+            continue
+        print(f"{c.name}: connecting to {c.host} ...")
+        r = login(c, cfg)
+        print(f"{c.name}: {'connected, master will stay open' if r == 0 else f'ssh exited {r}'}")
+        rc = rc or r
+    return rc
 
 
 def cmd_list(args) -> int:
@@ -140,11 +177,24 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--force", action="store_true", help="overwrite an existing config")
     s.set_defaults(func=cmd_init)
 
-    s = sub.add_parser("serve", help="start the collector and the web dashboard")
-    s.add_argument("--port", type=int, help="override listen_port")
-    s.add_argument("--host", help="override listen_host")
-    s.add_argument("--open", action="store_true", help="open the dashboard in a browser")
-    s.set_defaults(func=cmd_serve)
+    for name, help_text, open_default in (
+        ("monitor", "start polling and open the dashboard in your browser", True),
+        ("serve", "start the collector and the web dashboard without opening a browser", False),
+    ):
+        s = sub.add_parser(name, help=help_text)
+        s.add_argument("--port", type=int, help="override listen_port")
+        s.add_argument("--host", help="override listen_host")
+        if open_default:
+            s.add_argument("--no-open", dest="open", action="store_false", help="do not open a browser")
+        else:
+            s.add_argument("--open", action="store_true", help="open the dashboard in a browser")
+        s.set_defaults(func=cmd_serve, open=open_default)
+
+    s = sub.add_parser("login", help="open the persistent ssh connection to each cluster (allows password / 2FA)")
+    s.add_argument("cluster", nargs="*", help="only these clusters (default: all)")
+    s.add_argument("--force", action="store_true", help="reconnect even if a connection is already open")
+    s.add_argument("--close", action="store_true", help="close the persistent connection(s) instead")
+    s.set_defaults(func=cmd_login)
 
     s = sub.add_parser("list", help="poll once and print a table to the terminal")
     s.add_argument("--state", "-s", action="append",
