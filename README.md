@@ -165,6 +165,7 @@ network change that dropped the connection.
 | `omniqueue projects [--poll]` | who runs how much in your projects, from the stored slow poll (`--poll` asks the clusters now) |
 | `omniqueue predict -N 4 -t 12 [-G 4] [-A proj]` | experimental: rank clusters/partitions by estimated queue wait for such a job (`-G` GPUs per node: GPU partitions only) |
 | `omniqueue check` | connect to every cluster once and report problems |
+| `omniqueue check --raw [CLUSTER...]` | run the poll command once and print each part's exit status, first lines and stderr, plus the command itself to try by hand: the thing to look at when a card says `sacct exited 1` or a cluster stores no jobs |
 | `omniqueue init [--force]` | write the example config |
 | `omniqueue completion bash\|zsh\|fish` | print a tab-completion script |
 | `omniqueue --demo ...` | run any command against fabricated clusters |

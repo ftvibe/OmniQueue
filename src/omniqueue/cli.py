@@ -284,11 +284,55 @@ def cmd_list(args) -> int:
     return 0
 
 
+def _raw_check(cfg: Config, clusters, timeout: int) -> int:
+    """Run the exact poll command on each cluster and show every section's exit status,
+    first output lines and stderr: what to paste when a card says sacct failed."""
+    from .slurm import combined_command, split_combined_output
+    from .ssh import RemoteError, run_on_cluster
+
+    failed = 0
+    for c in clusters:
+        cmd = combined_command(c.user, cfg.lookback_hours, c.squeue_args, c.sacct_args, c.use_sacct, with_partition_gres=True)
+        print(f"\n== {c.name} (user = {c.user or '$USER'}, lookback = {cfg.lookback_hours} h, timeout = {timeout} s)")
+        print("   remote command, to try by hand on the cluster:\n   " + cmd.replace("; ", ";\n   "))
+        t0 = time.time()
+        try:
+            res = run_on_cluster(c, cmd, timeout, cfg)
+        except RemoteError as exc:
+            failed += 1
+            print(f"   [FAIL] {exc} ({exc.kind}) after {time.time() - t0:.1f}s")
+            continue
+        sections = split_combined_output(res.stdout)
+        print(f"   reply in {time.time() - t0:.1f}s, ssh exit {res.returncode}, sections: {', '.join(sections) or 'none'}")
+        for name, (out, rc) in sections.items():
+            lines = [ln for ln in out.splitlines() if ln.strip()]
+            tag = "ok  " if rc == 0 else "FAIL"
+            if rc != 0:
+                failed += 1
+            print(f"   [{tag}] {name}: exit {rc}, {len(lines)} lines")
+            for ln in lines[:3]:
+                print(f"          {ln[:160]}")
+            if len(lines) > 3:
+                print(f"          ... {len(lines) - 3} more")
+        if res.stderr.strip():
+            print("   stderr:")
+            for ln in res.stderr.strip().splitlines()[:10]:
+                print(f"          {ln[:200]}")
+    return 1 if failed else 0
+
+
 def cmd_check(args) -> int:
     """Connect to every cluster once and report what works."""
     cfg = _load(args)
     for w in _perm_warnings(cfg, args):
         print(f"[warn]  {w}")
+    if getattr(args, "raw", False):
+        wanted = set(args.cluster or [])
+        clusters = [c for c in cfg.enabled_clusters if not wanted or c.name in wanted]
+        if not clusters:
+            print("no such cluster; configured: " + ", ".join(c.name for c in cfg.enabled_clusters))
+            return 2
+        return _raw_check(cfg, clusters, max(cfg.ssh_timeout, cfg.project_timeout))
     collector = _collector(cfg, args)
     t0 = time.time()
     collector.refresh()
@@ -509,6 +553,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_predict)
 
     s = sub.add_parser("check", help="test the connection to every configured cluster")
+    s.add_argument("--raw", action="store_true",
+                   help="run the poll command once and print every part's exit status, output and stderr")
+    s.add_argument("cluster", nargs="*", help="with --raw: only these clusters (default all)")
     s.set_defaults(func=cmd_check)
 
     s = sub.add_parser("completion", help="print a tab-completion script for bash, zsh or fish")
