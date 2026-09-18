@@ -73,6 +73,7 @@ host = "tetralith"          # anything ssh accepts, aliases from ~/.ssh/config i
 # color = "#5f9e99"         # accent colour in the dashboard
 # logo = "~/Pictures/nsc.png" # or drop <name>.svg/.png into ~/.config/omniqueue/logos/
 # projects = ["naiss2025-1-23"]                    # watch these Slurm accounts: who runs how much (all users)
+#                                                  # GPU time is often a separate account (Dardel: "naiss2025-1-23-gpu"): list it too
 # project_quotas = { "naiss2025-1-23" = 100000 }  # core-hours per 30 days, if sshare does not publish a limit
 # project_gpu_quotas = { "naiss2025-1-23" = 2000 } # GPU-hours per 30 days; GPU jobs are kept apart from CPU jobs
 # project_pis = { "naiss2025-1-23" = "A. Nilsson" }   # PI (or any label) shown next to the project name
@@ -261,6 +262,9 @@ cluster names from your config, `list --state` the job states.
   partition that never asked for a gres, as on Dardel, counts as nodes x GPUs
   per node. The same remembered gres also sizes the project cards, so a project
   poll that ran before GPUs were tracked cannot leave them at 0 GPU-hours.
+  A project card can only show GPU-hours booked on the accounts it lists: at PDC
+  (Dardel) GPU time is a separate allocation with its own account name, usually
+  the compute project plus `-gpu`, so add that account to `projects` as well.
   Where `sinfo` reports no gres at all, `gpus_per_node = { gpu = 4 }`
   states the node size (it also marks the partition as a GPU one).
   `gpu_hour_factor` converts Slurm GPU units into billed GPU-hours (LUMI-G:

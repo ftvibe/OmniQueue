@@ -163,6 +163,7 @@ host = "tetralith"               # ssh alias
 # color = "#5f9e99"
 # logo = "~/Pictures/nsc.png"    # or drop <name>.png/.svg into ~/.config/omniqueue/logos/
 # projects = ["naiss2025-1-23"]  # Slurm accounts to watch: who runs how much, fairshare, quota (all users)
+#                                # GPU time may be a separate account (Dardel: "naiss2025-1-23-gpu"): list it too
 # project_quotas = { "naiss2025-1-23" = 100000 }   # core-hours per 30 days, when the site does not publish it via sshare
 # project_gpu_quotas = { "naiss2025-1-23" = 2000 } # GPU-hours per 30 days (GPU jobs are counted separately from CPU jobs)
 # project_pis = { "naiss2025-1-23" = "A. Nilsson" } # PI (or any label) shown next to the project name
