@@ -328,26 +328,23 @@ window is behind others. Query parameters tune it:
 `/widget?refresh=300&alerts=24&n=8` re-reads every 5 min, alerts on the last
 24 h and lists 8 jobs per section.
 
-## Two modes, two branches
+## Two modes
 
-`mode = "user"` shows your own jobs and *your* usage per project. `mode = "pi"`
-adds the project-wide parts below: the slow poll of whole projects, their
-cards, the project queue view and the experimental predictor. The code is the
-same; only the default differs between the two branches of the repository:
+`mode = "user"`, the default, shows your own jobs, the cluster load and *your*
+usage per project. `mode = "pi"` adds the project-wide parts below: the slow
+poll of whole projects, their cards, the project queue view and the
+experimental predictor. PIs and project managers put
 
-| branch | default mode | for |
-|---|---|---|
-| `USER-version` | `user` | one person watching their own jobs and usage |
-| `PI-version` | `pi` | a PI or project manager who also watches whole projects |
+```toml
+mode = "pi"
+```
 
-Either default can be overridden with `mode = ...` in the config. Fixes land on
-the trunk and are merged into both branches; the branches differ by one line
-(`DEFAULT_MODE` in `config.py`).
+at the top of their config; nothing else changes. The demo (`--demo`) runs in
+`pi` mode so that it shows everything.
 
 ## Projects: who runs how much
 
-Watching whole projects needs `mode = "pi"` (the default on the `PI-version`
-branch). List the Slurm accounts you share in a cluster entry (`projects = [...]`) and
+Watching whole projects needs `mode = "pi"` in the config. List the Slurm accounts you share in a cluster entry (`projects = [...]`) and
 OmniQueue watches the *whole* project, every user, on a much slower timescale
 than your own jobs: every 2 hours by default (`project_refresh_seconds`,
 overridable per cluster). One card per project sits under the cluster cards:

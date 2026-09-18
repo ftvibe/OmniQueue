@@ -11,8 +11,8 @@ from pathlib import Path
 
 
 # "user": your own jobs and your own usage per project; "pi": also the project-wide poll,
-# cards and predictor.  The USER-version branch of OmniQueue sets this to "user".
-DEFAULT_MODE = "pi"
+# cards and predictor.  Overridden by `mode = ...` in the config.
+DEFAULT_MODE = "user"
 
 
 def default_config_path() -> Path:
@@ -164,8 +164,8 @@ EXAMPLE_CONFIG = """\
 # alias from ~/.ssh/config (with ProxyJump, keys, ControlMaster, ...) works.
 # Password prompts are not supported: set up keys or an ssh agent first.
 
-# mode = "pi"             # "user": your jobs and your usage per project; "pi": also whole projects,
-                          # their cards and the predictor (needs `projects` on a cluster). Default: __MODE__
+# mode = "user"           # "user" (default): your jobs and your usage per project; "pi": also whole
+                          # projects, their cards and the predictor (needs `projects` on a cluster)
 refresh_seconds = 60      # how often every cluster is polled
 lookback_hours  = 72      # how far back sacct is asked for finished jobs (older history arrives in chunks)
 history_days    = 30      # finished jobs stay in the local history this long
@@ -427,6 +427,6 @@ def write_example_config(path: Path, force: bool = False) -> Path:
     if path.exists() and not force:
         raise ConfigError(f"{path} already exists (use --force to overwrite).")
     secure_dir(path.parent)
-    path.write_text(EXAMPLE_CONFIG.replace("__MODE__", DEFAULT_MODE))
+    path.write_text(EXAMPLE_CONFIG)
     os.chmod(path, 0o600)
     return path
