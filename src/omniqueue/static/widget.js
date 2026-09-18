@@ -232,6 +232,7 @@
 
     const eff = Math.round((snapshot.effective_refresh || snapshot.refresh_seconds) / 60);
     $("#w-status").textContent = `polled ${clock(snapshot.last_refresh)} · clusters polled every ${eff} min · widget re-reads every ${Math.round(REFRESH_S / 60)} min`;
+    $("#w-signout").hidden = !snapshot.protected;
   }
   function latestTime(it, field) {
     if (it.kind === "job") return it.job[field];

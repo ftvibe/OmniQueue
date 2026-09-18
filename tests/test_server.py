@@ -264,6 +264,12 @@ class AccessTokenTests(unittest.TestCase):
             self.assertIsNotNone(cookie.expires)  # kept, not a session cookie
             with opener.open(f"http://127.0.0.1:{port}/api/state") as r:
                 self.assertEqual(r.status, 200)
+                self.assertTrue(json.loads(r.read())["protected"])  # the page shows "sign out"
+            with opener.open(f"http://127.0.0.1:{port}/logout") as r:
+                self.assertEqual(r.status, 200)
+            with self.assertRaises(urllib.error.HTTPError) as ctx:  # cookie gone: locked out again
+                opener.open(f"http://127.0.0.1:{port}/api/state")
+            self.assertEqual(ctx.exception.code, 401)
             # a wrong token sets nothing; an off-site `next` is ignored
             with self.assertRaises(urllib.error.HTTPError):
                 urllib.request.urlopen(f"http://127.0.0.1:{port}/?token=wrong")

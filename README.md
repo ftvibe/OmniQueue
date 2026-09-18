@@ -547,7 +547,9 @@ as possible and to fail closed. Before pointing it at real clusters:
   browser at `/?token=...` (with `&next=/widget` for the widget), which sets the
   cookie for 30 days and redirects to the view, so the token leaves the address
   bar at once. From another browser or after clearing cookies, open the link
-  `omniqueue monitor` prints once more. Nothing else changes.
+  `omniqueue monitor` prints once more. **Sign out** in the page footer (or
+  `/logout`) drops the cookie in that browser; changing the token in the config
+  and restarting locks every browser out at once. Nothing else changes.
 
 ## How data is gathered
 

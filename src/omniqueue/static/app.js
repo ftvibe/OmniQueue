@@ -436,6 +436,7 @@
     $("#footer-note").textContent = state.error
       ? state.error
       : `showing finished jobs from ${windowLabel} · clusters are asked for the last ${snap.lookback_hours} h, older jobs come from the local history · times as the cluster reports them`;
+    $("#signout").hidden = !snap.protected;
   }
 
   function renderClusters() {

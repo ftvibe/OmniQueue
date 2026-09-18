@@ -121,6 +121,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/" and self._try_token_login(url):
             return
+        if path == "/logout":  # drop the access cookie in this browser; the token itself stays valid
+            self._send(HTTPStatus.OK, b"OmniQueue: signed out in this browser. Open /?token=... to sign in again.\n", "text/plain",
+                       {"Set-Cookie": f"{COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"})
+            return
         if not self._authorised():
             self._send(HTTPStatus.UNAUTHORIZED, b"OmniQueue: access token required (open /?token=...)\n", "text/plain")
             return
@@ -132,7 +136,8 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError:
                     interval = 0.0
                 self.collector.register_viewer(client[:64], interval)
-            self._json_if_changed(self.collector.state_etag(), self.collector.snapshot)
+            self._json_if_changed(self.collector.state_etag(),
+                                  lambda: {**self.collector.snapshot(), "protected": bool(self.access_token)})
             return
         if path == "/api/load":
             self._json_if_changed(self.collector.load_etag(), self.collector.load_snapshot)
