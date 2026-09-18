@@ -418,6 +418,16 @@ re-read only the cluster's project `squeue` (running and waiting jobs, plus
 their GPU allocations from the long-format `squeue`), which is cheap; the
 accounting, fairshare and load samples keep their slow schedule.
 
+**Comparing with the site's own numbers** (`projinfo` at PDC, `lumi-allocations`
+on LUMI, `projinfo` at NSC): expect the card to sit within a percent or two,
+sometimes above, sometimes below. Both count a rolling 30-day window, but the
+card's window ends when you look and holds records as fresh as the last
+project poll (the ↻ button brings them up to the minute), while the site
+recomputes its figure once or twice a day. The card also counts only the part
+of a job that lies inside the window, where the site books whole jobs by their
+end time. A gap that grows steadily in one direction, rather than wandering
+around zero, would mean records are missing and is worth reporting.
+
 ### Where to submit? (experimental)
 
 Type `experimental` into the search box and a dashed **where to submit?**
