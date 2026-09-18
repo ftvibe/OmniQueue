@@ -210,3 +210,33 @@ class ServerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HostHeaderTests(unittest.TestCase):
+    def test_foreign_host_header_is_rejected_on_loopback(self):
+        import urllib.error
+        tmp = tempfile.TemporaryDirectory()
+        cfg = demo_config(mode="pi")
+        server = make_server(DemoCollector(cfg, HistoryStore(Path(tmp.name) / "h.json")), "127.0.0.1", 0)
+        port = server.server_address[1]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            # a rebinding attacker's page: its own domain resolves to 127.0.0.1
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/api/state", headers={"Host": "attacker.example:%d" % port})
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                urllib.request.urlopen(req)
+            self.assertEqual(ctx.exception.code, 421)
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/api/refresh", method="POST", data=b"", headers={"Host": "attacker.example"})
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                urllib.request.urlopen(req)
+            self.assertEqual(ctx.exception.code, 421)
+            # the names a person types keep working, with or without a port
+            for host in (f"localhost:{port}", "127.0.0.1", f"[::1]:{port}", "LOCALHOST"):
+                req = urllib.request.Request(f"http://127.0.0.1:{port}/api/state", headers={"Host": host})
+                with urllib.request.urlopen(req) as r:
+                    self.assertEqual(r.status, 200, host)
+        finally:
+            server.shutdown()
+            server.server_close()
+            tmp.cleanup()

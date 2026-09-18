@@ -41,6 +41,7 @@ class Handler(BaseHTTPRequestHandler):
     projects: ProjectPoller | None  # slow project poller (None when no cluster lists projects)
     csrf_token: str  # per-process secret embedded in the page; required on every POST
     access_token: str | None  # from the config; required on every request when set
+    allowed_hosts: frozenset[str] | None  # Host header values accepted on a loopback listener (None = any)
     server_version = "OmniQueue/0.1"
 
     def log_message(self, fmt: str, *args) -> None:  # quieter default logging
@@ -59,6 +60,19 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     # -- access control ------------------------------------------------------------
+    def _host_ok(self) -> bool:
+        """On a loopback listener the Host header must name this machine.  A web page that
+        points its own domain at 127.0.0.1 (DNS rebinding) would otherwise be same-origin
+        with the dashboard in the visitor's browser and could read the job data."""
+        if self.allowed_hosts is None:
+            return True
+        host = self.headers.get("Host", "").strip().lower()
+        if host.startswith("["):  # [::1]:8765
+            host = host[1:host.find("]")] if "]" in host else host
+        elif host.count(":") == 1:
+            host = host.rsplit(":", 1)[0]
+        return host in self.allowed_hosts
+
     def _authorised(self) -> bool:
         """When an access token is configured, every request must carry it as a cookie.
         `/?token=...` sets that cookie once (and redirects), so a link can be opened directly."""
@@ -96,6 +110,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - http.server API
         url = urlparse(self.path)
         path = url.path
+        if not self._host_ok():
+            self._send(HTTPStatus.MISDIRECTED_REQUEST, b"OmniQueue: unexpected Host header\n", "text/plain")
+            return
         if path == "/" and self._try_token_login(url):
             return
         if not self._authorised():
@@ -165,6 +182,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
+        if not self._host_ok():
+            self._send(HTTPStatus.MISDIRECTED_REQUEST, b"OmniQueue: unexpected Host header\n", "text/plain")
+            return
         if not self._authorised():
             self._json({"error": "access token required"}, HTTPStatus.UNAUTHORIZED)
             return
@@ -239,10 +259,13 @@ class Handler(BaseHTTPRequestHandler):
 
 def make_server(collector: Collector, host: str, port: int, access_token: str | None = None,
                 projects: ProjectPoller | None = None) -> ThreadingHTTPServer:
+    loopback = host in ("127.0.0.1", "::1", "localhost")
     handler = type("BoundHandler", (Handler,), {
         "collector": collector,
         "projects": projects,
         "csrf_token": secrets.token_urlsafe(32),
         "access_token": access_token,
+        # on loopback only these names reach the dashboard; a remote listener relies on the access token
+        "allowed_hosts": frozenset({"127.0.0.1", "::1", "localhost", host.lower()}) if loopback else None,
     })
     return ThreadingHTTPServer((host, port), handler)

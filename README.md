@@ -527,11 +527,19 @@ as possible and to fail closed. Before pointing it at real clusters:
   `persist_seconds` (default 4 h). Shorten it, or set
   `persist_connections = false` for a fresh ssh per poll, if a lingering
   authenticated session on your laptop worries you more than the reconnects.
-* **The web API is protected.** Every POST (`/api/refresh`, `/api/forget/...`)
-  must carry a per-process token that only the served page knows, which stops
-  other websites from triggering actions in your browser. Responses carry a
-  strict Content-Security-Policy and `nosniff`/`DENY` headers, and no inline
-  scripts are used.
+* **The web API is protected.** Every POST (`/api/refresh`, `/api/forget/...`,
+  the project and predictor endpoints) must carry a per-process token that only
+  the served page knows, which stops other websites from triggering actions in
+  your browser. On the loopback listener the `Host` header must name this
+  machine, so a web page that points its own domain at 127.0.0.1 (DNS
+  rebinding) cannot read your job data either. Responses carry a strict
+  Content-Security-Policy and `nosniff`/`DENY` headers, and no inline scripts
+  are used.
+* **On a shared machine, set a token even locally.** Anyone with a shell on the
+  same computer can open `http://127.0.0.1:8765`. An `access_token` in the
+  config is honoured on loopback too: every request then needs the cookie,
+  `omniqueue monitor` opens the browser with `/?token=...` once to set it, and
+  the widget is opened from that page. Keep the token out of shell history.
 
 ## How data is gathered
 
