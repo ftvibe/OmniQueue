@@ -167,6 +167,11 @@ class ServerTests(unittest.TestCase):
                                      headers={"X-OmniQueue-Token": self._token()})
         with urllib.request.urlopen(req) as r:
             self.assertEqual(json.loads(r.read())["started"], True)
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/projects/queue/refresh", method="POST",
+                                     data=json.dumps({"cluster": "tetralith"}).encode(),
+                                     headers={"X-OmniQueue-Token": self._token(), "Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as r:
+            self.assertEqual(json.loads(r.read())["started"], True)
         # the index page carries the projects section and the (hidden) experimental controls
         page = self.get("/")[2]
         self.assertIn(b'id="projects"', page)

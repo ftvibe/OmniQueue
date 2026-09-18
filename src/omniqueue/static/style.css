@@ -128,6 +128,10 @@ kbd { font: 11px var(--mono); background: var(--surface-2); border: 1px solid va
 .pcard-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .pcard-head b { font-size: 15px; }
 .pcard-head small { margin-left: auto; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.qrefresh { background: none; border: 1px solid transparent; padding: 0 5px; color: var(--muted); font-size: 13px; line-height: 1.3; }
+.qrefresh:hover { color: var(--ink); border-color: var(--border); }
+.qrefresh.spin { animation: spin 1s linear infinite; }
+#project-queue-refresh.spin::before { content: "⟳ "; display: inline-block; animation: spin 1s linear infinite; }
 .prows { display: grid; gap: 6px; }
 .prow { display: grid; grid-template-columns: 82px 1fr; gap: 2px 10px; align-items: center; font-size: 13px; }
 .plabel { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .4px; grid-row: span 2; align-self: start; padding-top: 2px; }

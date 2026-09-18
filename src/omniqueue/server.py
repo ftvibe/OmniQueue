@@ -183,6 +183,12 @@ class Handler(BaseHTTPRequestHandler):
             started = self.projects.request_refresh() if self.projects else False
             self._json({"ok": True, "started": started})
             return
+        if path == "/api/projects/queue/refresh":
+            body = self._body()
+            cluster = str(body.get("cluster"))[:64] if body.get("cluster") else None
+            started = self.projects.request_queue_refresh(cluster) if self.projects else False
+            self._json({"ok": True, "started": started})
+            return
         if path == "/api/experimental/predict":
             self._predict()
             return

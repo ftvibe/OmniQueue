@@ -686,10 +686,16 @@
       renderProjects();
       if (state.view === "project") renderProjectView();
     } catch { /* the cluster cards already show that the server is unreachable */ }
-    if (state.projects?.projects?.some((p) => p.fetching || p.backfill_pending)) setTimeout(fetchProjects, p_backfill_ms(state.projects));
+    if (state.projects?.projects?.some((p) => p.fetching || p.queue_fetching || p.backfill_pending)) setTimeout(fetchProjects, p_backfill_ms(state.projects));
   }
-  const p_backfill_ms = (pr) => (pr.projects.some((p) => p.fetching) ? 2000 : 15000); // chunks arrive a minute apart
+  const p_backfill_ms = (pr) => (pr.projects.some((p) => p.fetching || p.queue_fetching) ? 2000 : 15000); // chunks arrive a minute apart
   const pr_history_days = () => state.projects?.history_days || 90;
+  async function refreshQueue(cluster) {
+    try {
+      await fetch("/api/projects/queue/refresh", { method: "POST", headers: { "X-OmniQueue-Token": TOKEN, "Content-Type": "application/json" }, body: JSON.stringify(cluster ? { cluster } : {}) });
+    } catch { /* ignore */ }
+    setTimeout(fetchProjects, 600);
+  }
   async function refreshProjects() {
     try { await post("/api/projects/refresh"); } catch { /* ignore */ }
     $("#proj-status").textContent = "polling the projects…";
@@ -739,8 +745,10 @@
     card.append(el("div", { class: "pcard-head" },
       el("span", { class: "w-cpill", style: `background:${color};color:#fff` }, p.cluster),
       el("b", {}, p.project),
-      el("small", { class: "muted", title: `polled every ${fmtEvery(p.refresh_seconds)} in the background; next ${p.next_poll ? clock(p.next_poll).slice(0, 5) : "–"}` },
-        `${updated} · every ${fmtEvery(p.refresh_seconds)}${cover}`)));
+      el("small", { class: "muted", title: `queue as of ${p.updated ? clock(p.updated) : "–"}; the full poll (accounting, fairshare, load) runs every ${fmtEvery(p.refresh_seconds)} in the background, next ${p.next_poll ? clock(p.next_poll).slice(0, 5) : "–"}` },
+        `${updated} · every ${fmtEvery(p.refresh_seconds)}${cover}`),
+      el("button", { class: `qrefresh ${p.queue_fetching ? "spin" : ""}`, title: "re-read this cluster's project queue now (squeue only, no accounting)",
+        onclick: (e) => { e.stopPropagation(); refreshQueue(p.cluster); } }, "↻")));
     if (p.error && !p.updated) {
       const kind = p.error_kind || "";
       card.append(el("div", { class: `card-error ${kind}` }, el("span", { class: "warn-icon" }, kind === "login" ? "○" : "⚠"),
@@ -764,7 +772,7 @@
       // GPU side: GPUs now, GPU-hours over 30 days (jobs with GPUs or on a GPU partition)
       rows.append(usageRow("gpu now",
         el("span", {}, `${plural(rg.jobs, "job")} · ${fmtInt(Math.round(rg.gpus))} GPUs`, qg.jobs ? el("span", { class: "muted" }, ` · ${fmtInt(qg.jobs)} waiting`) : null),
-        `${rg.jobs} running GPU jobs on ${rg.nodes} nodes, ${qg.jobs} waiting (${Math.round(qg.gpus)} GPUs asked for)` + (p.gpu_partitions.length ? `; GPU partitions: ${p.gpu_partitions.join(", ")}` : "") + (p.gpu_factor !== 1 ? `; Slurm GPU units x ${p.gpu_factor}` : ""),
+        `${rg.jobs} running GPU jobs on ${rg.nodes} nodes, ${qg.jobs} waiting (${Math.round(qg.gpus)} GPUs asked for)` + (p.gpu_partitions.length ? `; GPU partitions: ${p.gpu_partitions.join(", ")}` : "") + (p.gpu_factor !== 1 ? `; counted in Slurm GPU units (GPU-hours are billed x ${p.gpu_factor})` : ""),
         users.map((u) => [u, rg.users[u]?.gpus || 0]).filter(([, v]) => v > 0), rg.gpus, "GPUs in use right now, by user"));
       rows.append(usageRow("gpu 30 d",
         el("span", {}, `${fmtGpuH(u30.gpu.gpu_h)} · ${plural(u30.gpu.jobs, "job")}`, el("span", { class: "muted" }, ` · 7 d ${fmtCoreH(u7.gpu.gpu_h)}`)),
@@ -833,10 +841,13 @@
     const rc = p.running.cpu, rg = p.running.gpu, qc = p.pending.cpu, qg = p.pending.gpu;
     title.replaceChildren(el("span", { class: "w-cpill", style: `background:${color};color:#fff` }, p.cluster), el("b", {}, p.project),
       el("span", { class: "muted" }, ` · ${plural(rc.jobs + rg.jobs, "job")} running, ${fmtInt(qc.jobs + qg.jobs)} waiting`
-        + (p.has_gpu ? ` · ${fmtInt(Math.round(rc.cores))} cores and ${fmtInt(Math.round(rg.gpus))} GPUs in use` + (p.gpu_factor !== 1 ? ` (Slurm units x ${p.gpu_factor})` : "") : ` · ${fmtInt(Math.round(rc.cores))} cores in use`)));
-    $("#project-note").textContent = p.updated
-      ? `every user's jobs in this project as of the last project poll (${clock(p.updated).slice(0, 5)}, every ${fmtEvery(p.refresh_seconds)}); pending arrays count as one row`
+        + (p.has_gpu ? ` · ${fmtInt(Math.round(rc.cores))} cores and ${fmtInt(Math.round(rg.gpus))} GPUs in use` + (p.gpu_factor !== 1 ? ` (Slurm units; billed x ${p.gpu_factor})` : "") : ` · ${fmtInt(Math.round(rc.cores))} cores in use`)));
+    $("#project-note").textContent = p.queue_error ? `queue refresh failed: ${p.queue_error}`
+      : p.queue_fetching ? "re-reading the queue…"
+      : p.updated ? `every user's jobs in this project as of ${clock(p.updated).slice(0, 5)} (the full poll runs every ${fmtEvery(p.refresh_seconds)}; ↻ refresh queue re-reads only squeue); pending arrays count as one row`
       : "no data yet";
+    $("#project-queue-refresh").onclick = () => refreshQueue(p.cluster);
+    $("#project-queue-refresh").classList.toggle("spin", !!p.queue_fetching);
     const rows = (p.jobs_now || []).map((j) => {
       const me = j.user === p.me;
       const frac = j.category === "running" && j.time_limit_s ? Math.min(1, (j.elapsed_s || 0) / j.time_limit_s) : null;
@@ -851,8 +862,8 @@
         el("td", { class: "num mono" }, fmtDuration(j.time_limit_s)),
         el("td", { class: "num" }, j.nodes || "–"),
         el("td", { class: "num" }, fmtInt(Math.round(j.cores))),
-        el("td", { class: `num ${j.kind === "gpu" ? "gpu" : "muted"}`, title: j.kind === "gpu" && p.gpu_factor !== 1 ? `${j.gpu_units} Slurm GPU units x ${p.gpu_factor}` : "" },
-          j.kind === "gpu" ? (p.gpu_factor !== 1 && j.gpus !== Math.round(j.gpus) ? j.gpus.toFixed(1) : fmtInt(Math.round(j.gpus))) : "–"),
+        el("td", { class: `num ${j.kind === "gpu" ? "gpu" : "muted"}`, title: j.kind === "gpu" && p.gpu_factor !== 1 ? `${j.gpus} Slurm GPU units, billed as ${(j.gpus * p.gpu_factor).toFixed(1)} GPUs` : "" },
+          j.kind === "gpu" ? fmtInt(Math.round(j.gpus)) : "–"),
         el("td", {}, j.partition || "–"));
     });
     $("#project-jobs tbody").replaceChildren(...rows);

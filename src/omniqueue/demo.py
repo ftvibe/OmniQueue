@@ -292,6 +292,15 @@ class DemoProjectPoller(ProjectPoller):
             rows += _demo_project_rows(cluster.name, proj, self._rng, time.time(), days=(end_ts - start_ts) / 86400, until=end_ts)[0]
         return rows
 
+    def fetch_queue(self, cluster: ClusterConfig):
+        self._offline(cluster)
+        rows: list[dict] = []
+        for proj in cluster.projects:
+            if proj == "naiss2025-22-8":
+                continue
+            rows += _demo_project_rows(cluster.name, proj, self._rng, time.time(), days=0.5)[1]
+        return rows
+
     def fetch(self, cluster: ClusterConfig, start_ts: float):
         self._offline(cluster)
         now = time.time()

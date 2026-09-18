@@ -308,8 +308,9 @@ overridable per cluster). One card per project sits under the cluster cards:
   The two sides never mix: a GPU job's cores are not added to the CPU figures.
   Where Slurm's GPU units are not whole GPUs, `gpu_hour_factor` converts them:
   LUMI-G exposes each MI250X as two units and bills half a GPU-hour per unit,
-  so `gpu_hour_factor = 0.5` there makes the GPU-hours, the GPUs in use and
-  the predictor's quota check match the invoice.
+  so `gpu_hour_factor = 0.5` there makes the GPU-hours and the predictor's
+  quota check match the invoice. GPUs *in use* stay in Slurm units, since that
+  is what `squeue` and the scheduler count.
   A store written before GPUs were tracked is re-fetched once, in the usual
   back-fill chunks, to add the GPU counts;
 * the user legend with each person's 30-day core-hours and, where they have
@@ -347,7 +348,10 @@ waits for `omniqueue login` and the card says "not logged in" until then. The
 **Click a card** to see the project's queue as of the last project poll: every
 user's running and waiting jobs with name, state, elapsed bar, limit, nodes,
 cores, GPUs and partition, your own rows in bold. `q` or Esc returns to your
-jobs.
+jobs. The small ↻ on a card and the **↻ refresh queue** button in that view
+re-read only the cluster's project `squeue` (running and waiting jobs, plus
+their GPU allocations from the long-format `squeue`), which is cheap; the
+accounting, fairshare and load samples keep their slow schedule.
 
 ### Where to submit? (experimental)
 
@@ -477,6 +481,7 @@ The project poll, every `project_refresh_seconds` per cluster, runs in one round
 
 ```
 squeue --noheader --states=RUNNING,PENDING --account=<projects> --format='%i|%a|%u|%T|%P|%D|%C|%l|%M|%b|%j'; \
+squeue --noheader --states=RUNNING,PENDING --account=<projects> --Format='JobID:60|,NumNodes:12|,tres-alloc:400|,...'; \
 sacct  --noheader --parsable2 --allocations --allusers --accounts=<projects> --starttime=<last poll - 1 d> --format=JobID,Account,User,...,AllocTRES; \
 sshare --noheader --parsable2 --all --accounts=<projects> --format=Account,User,RawShares,...,FairShare,GrpTRESMins,GrpTRESRaw,TRESRunMins; \
 sinfo ...; squeue --states=RUNNING,PENDING ...          # the same load sample the load view takes

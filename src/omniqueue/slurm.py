@@ -522,6 +522,42 @@ def project_sacct_command(projects: list[str], start_ts: float, end_ts: float | 
             f"--starttime={_slurm_time(start_ts)} --endtime={end} --format={','.join(PROJECT_SACCT_FIELDS)}")
 
 
+# squeue's long format can print a job's TRES, which the short %b cannot: allocated TRES for
+# running jobs (gres/gpu=8), the per-node or per-job request for waiting ones (gres/gpu:8).
+# Fields are padded to the given width and followed by the "|" suffix; parse_squeue_tres strips them.
+SQUEUE_TRES_FORMAT = "JobID:60|,NumNodes:12|,tres-alloc:400|,tres-per-node:200|,tres-per-job:200|"
+
+
+def project_queue_command(projects: list[str]) -> str:
+    """Only the projects' queue (running and waiting jobs): the cheap part of a poll."""
+    accounts = shlex.quote(",".join(projects))
+    return "; ".join([
+        f"squeue --noheader --states=RUNNING,PENDING --account={accounts} --format={shlex.quote(PROJECT_SQUEUE_FIELDS)}",
+        f'echo "{MARK} squeue_proj rc=$?"',
+        f"squeue --noheader --states=RUNNING,PENDING --account={accounts} --Format={shlex.quote(SQUEUE_TRES_FORMAT)}",
+        f'echo "{MARK} squeue_tres rc=$?"',
+    ])
+
+
+def parse_squeue_tres(output: str) -> dict[str, int]:
+    """job id -> GPUs (Slurm units) from the long-format squeue: allocated TRES first,
+    then the per-node request times the node count, then the per-job request."""
+    out: dict[str, int] = {}
+    for line in output.splitlines():
+        cols = [c.strip() for c in line.split("|")]
+        if len(cols) < 5 or not cols[0]:
+            continue
+        job_id, nodes, alloc, per_node, per_job = cols[:5]
+        gpus = gpus_from_tres(alloc)
+        if not gpus:
+            gpus = gpus_from_gres(per_node) * max(1, _int(nodes))
+        if not gpus:
+            gpus = gpus_from_gres(per_job)
+        if gpus:
+            out[job_id] = gpus
+    return out
+
+
 def project_command(projects: list[str], start_ts: float, partitions: list[str] | None = None) -> str:
     """Everything one project poll needs, in one ssh round trip: the projects' queue,
     their accounting since `start_ts`, fairshare/usage from sshare, and a load sample
@@ -529,8 +565,7 @@ def project_command(projects: list[str], start_ts: float, partitions: list[str] 
     query is the slow one on a busy accounting database."""
     accounts = shlex.quote(",".join(projects))
     parts = [
-        f"squeue --noheader --states=RUNNING,PENDING --account={accounts} --format={shlex.quote(PROJECT_SQUEUE_FIELDS)}",
-        f'echo "{MARK} squeue_proj rc=$?"',
+        project_queue_command(projects),
         project_sacct_command(projects, start_ts),
         f'echo "{MARK} sacct_proj rc=$?"',
         f"sshare --noheader --parsable2 --all --accounts={accounts} --format={','.join(SSHARE_FIELDS)}",

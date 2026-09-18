@@ -11,7 +11,8 @@ from omniqueue.config import ClusterConfig, Config, ConfigError, config_from_dic
 from omniqueue.history import HistoryStore
 from omniqueue.predict import Request, explain, predict
 from omniqueue.projects import ProjectPoller, ProjectStore, slurm_ts
-from omniqueue.slurm import parse_project_queue, parse_project_sacct, parse_sshare, project_backfill_command, project_command
+from omniqueue.slurm import (parse_project_queue, parse_project_sacct, parse_squeue_tres, parse_sshare, project_backfill_command,
+                             project_command, project_queue_command)
 
 NOW = time.mktime((2026, 9, 18, 12, 0, 0, 0, 0, -1))
 
@@ -51,7 +52,23 @@ gpu|up|1|idle|0/32/0/32|1-00:00:00|2:16:1|32|gpu:a100:4
 SQUEUE_ALL_OUT = "501|main|RUNNING|4|128\n502|main|PENDING|2|64\n503_[1-20]|main|PENDING|1|32\n505|gpu|RUNNING|1|16\n"
 
 
+SQUEUE_TRES_OUT = """\
+501                 |4         |cpu=128,mem=500G,node=4,billing=128           |N/A                 |N/A                 |
+505                 |1         |cpu=16,mem=60G,node=1,billing=16,gres/gpu=2   |gres/gpu:2          |N/A                 |
+506                 |1         |N/A                                            |gres/gpu:mi250:1    |N/A                 |
+507                 |2         |N/A                                            |N/A                 |gres/gpu:4          |
+"""
+
+
 class ParserTests(unittest.TestCase):
+    def test_squeue_tres(self):
+        tres = parse_squeue_tres(SQUEUE_TRES_OUT)
+        self.assertEqual(tres, {"505": 2, "506": 1, "507": 4})  # alloc, per node x nodes, per job
+        cmd = project_queue_command(["proj-a"])
+        self.assertIn("--Format=", cmd)
+        self.assertIn("@@OMNIQUEUE squeue_tres rc=$?", cmd)
+        self.assertNotIn("sacct", cmd)
+
     def test_command(self):
         cmd = project_command(["proj-a", "proj-b"], NOW - 48 * 3600, ["main"])
         self.assertIn("--account=proj-a,proj-b", cmd)
@@ -145,12 +162,12 @@ class StoreTests(unittest.TestCase):
             self.assertEqual(s["jobs_now"][1]["gpus"], 2)
             self.assertEqual(s["jobs_now"][4]["gpus"], 1)
             self.assertEqual(s["jobs_now"][0]["name"], "vasp-relax")
-            # LUMI-style billing: two Slurm units per GPU, half a GPU-hour each
+            # LUMI-style billing: two Slurm units per GPU, half a GPU-hour each; the factor only prices
+            # GPU-hours, what is in use stays in Slurm units
             h = store.summary("c1", "proj-a", NOW, quota_gpu_h=500, gpu_factor=0.5)
             self.assertAlmostEqual(h["usage"]["7"]["gpu"]["gpu_h"], 5, delta=0.05)
-            self.assertEqual(h["running"]["gpu"]["gpus"], 1.0)
-            self.assertEqual(h["jobs_now"][1]["gpu_units"], 2)
-            self.assertEqual(h["jobs_now"][1]["gpus"], 1.0)
+            self.assertEqual(h["running"]["gpu"]["gpus"], 2)
+            self.assertEqual(h["jobs_now"][1]["gpus"], 2)
             self.assertAlmostEqual(h["gpu_quota"]["used_h"], 5, delta=0.05)
             self.assertEqual(h["usage"]["7"]["gpu"]["jobs"], 2)  # the split itself is unchanged
             # without a configured quota the sshare group limit is used
@@ -210,7 +227,9 @@ class PollerTests(unittest.TestCase):
         self.env = mock.patch.dict(os.environ, {"PATH": f"{self.bin}:/usr/bin:/bin", "USER": "alice"})
         self.env.start()
         _fake_bin(self.bin, "squeue",
+                  f"echo \"$*\" >> {self.tmp.name}/squeue.log\n"
                   "case \"$*\" in\n"
+                  f"  *--Format=*) cat <<'X'\n{SQUEUE_TRES_OUT}X\n ;;\n"
                   f"  *--account=*) cat <<'X'\n{QUEUE_OUT}X\n ;;\n"
                   f"  *--states=RUNNING,PENDING*) cat <<'X'\n{SQUEUE_ALL_OUT}X\n ;;\n"
                   "  *) exit 0 ;;\n"
@@ -287,6 +306,25 @@ class PollerTests(unittest.TestCase):
         snap = poller.snapshot()
         self.assertFalse(snap["projects"][0]["backfill_pending"])
         self.assertAlmostEqual(snap["projects"][0]["coverage_days"], 20, delta=0.1)
+
+    def test_queue_refresh_is_squeue_only(self):
+        poller, store, _ = self._poller()
+        cluster = poller.config.clusters[0]
+        poller.refresh([cluster])
+        first_ts = store.queue("here", "proj-a")["ts"]
+        log = Path(self.tmp.name) / "squeue.log"
+        n_before = len(log.read_text().splitlines())
+        sacct_log = Path(self.tmp.name) / "sacct.log"
+        _fake_bin(self.bin, "sacct", f"echo hit >> {sacct_log}; cat <<'X'\n{SACCT_OUT}X\n")
+        poller.refresh_queue([cluster])
+        self.assertEqual(len(log.read_text().splitlines()), n_before + 2)  # short and long squeue, nothing else
+        self.assertFalse(sacct_log.exists())
+        self.assertGreater(store.queue("here", "proj-a")["ts"], first_ts - 1)
+        s = poller.snapshot()["projects"][0]
+        self.assertEqual(s["running"]["gpu"]["gpus"], 2)  # GPUs from squeue's TRES, no accounting needed
+        self.assertFalse(s["queue_fetching"])
+        self.assertIsNone(s["queue_error"])
+        self.assertAlmostEqual(s["updated"], store.queue("here", "proj-a")["ts"])
 
     def test_login_gate(self):
         poller, _, collector = self._poller()

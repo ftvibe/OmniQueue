@@ -22,8 +22,8 @@ from pathlib import Path
 from typing import Any
 
 from .config import ClusterConfig, Config, secure_dir
-from .slurm import (parse_load, parse_project_queue, parse_project_sacct, parse_sshare, project_backfill_command,
-                    project_command, split_combined_output)
+from .slurm import (parse_load, parse_project_queue, parse_project_sacct, parse_squeue_tres, parse_sshare,
+                    project_backfill_command, project_command, project_queue_command, split_combined_output)
 from .ssh import RemoteError, close_connection, run_on_cluster, touch_last_use
 
 log = logging.getLogger("omniqueue.projects")
@@ -169,6 +169,14 @@ class ProjectStore:
                 oldest[cluster] = min(oldest.get(cluster, window_start), window_start)
             self._prune(now)
 
+    def record_queue(self, cluster: str, projects: list[str], now: float, queue_rows: list[dict]) -> None:
+        """Replace the stored queue of a cluster's projects (the quick refresh)."""
+        with self._lock:
+            self._learn_gpu_partitions(cluster, queue_rows)
+            queue = self.data["queue"].setdefault(cluster, {})
+            for proj in projects:
+                queue[proj] = {"ts": now, "rows": [r for r in queue_rows if r.get("account") == proj]}
+
     def _add_load_samples(self, cluster: str, now: float, load_parts: list[dict]) -> None:
         load = self.data["load"].setdefault(cluster, {})
         for p in load_parts:
@@ -297,7 +305,7 @@ class ProjectStore:
             return g
 
         def gpus_of(rec: dict, count: int = 1) -> float:
-            """Billed GPUs of a job: Slurm units x the cluster's factor."""
+            """Billed GPUs of a job (for GPU-hours): Slurm units x the cluster's factor."""
             return gpu_units(rec) * gpu_factor * count
 
         def with_accounting(row: dict) -> dict:
@@ -390,14 +398,14 @@ class ProjectStore:
                 continue
             row = with_accounting(row)
             count = row.get("tasks") or 1
-            jobs_now.append({**row, "kind": kind_of(row), "cores": cores_of(row), "gpus": gpus_of(row), "gpu_units": gpu_units(row),
+            jobs_now.append({**row, "kind": kind_of(row), "cores": cores_of(row), "gpus": gpu_units(row),
                              "category": "running" if row.get("state") == "RUNNING" else "pending"})
             cores = cores_of(row) * count
             user = row.get("user") or "?"
             targets = []
             if kind_of(row) == "gpu":
                 b = bucket["gpu"]
-                gpus = gpus_of(row, count)
+                gpus = gpu_units(row) * count  # what is in use, in Slurm units; the factor only prices GPU-hours
                 b["gpus"] += gpus
                 u = b["users"].setdefault(user, {"jobs": 0, "gpus": 0.0})
                 u["gpus"] += gpus
@@ -489,7 +497,7 @@ class ProjectPoller:
                 "name": c.name, "projects": list(c.projects), "refresh_seconds": config.project_interval(c),
                 "last_poll": last, "next_poll": (last + config.project_interval(c)) if last else now + 5,
                 "error": None, "error_kind": None, "warning": None, "fetching": False, "backfilling": False,
-                "poll_seconds": None, "coverage_days": None,
+                "poll_seconds": None, "coverage_days": None, "queue_fetching": False, "queue_error": None,
             }
             if last is not None:
                 self.status[c.name]["coverage_days"] = self.coverage_days(c, now)
@@ -542,7 +550,7 @@ class ProjectPoller:
         Returns (queue rows, sacct rows, sshare rows, load partitions, warnings)."""
         res = self._run(cluster, project_command(list(cluster.projects), start_ts, None))  # all partitions: GPU detection needs them
         section, warnings = self._sections(res)
-        queue_rows = parse_project_queue(section("squeue_proj", required=True))
+        queue_rows = self._queue_rows(section)
         sacct_rows = parse_project_sacct(section("sacct_proj"))
         sshare_rows = parse_sshare(section("sshare"))
         si_out = section("sinfo")
@@ -554,6 +562,63 @@ class ProjectPoller:
             warnings.append("sacct shows only your own jobs here (site hides other users' accounting); "
                             "usage by user comes from sshare and the queue only")
         return queue_rows, sacct_rows, sshare_rows, load_parts, warnings
+
+    @staticmethod
+    def _queue_rows(section) -> list[dict]:
+        rows = parse_project_queue(section("squeue_proj", required=True))
+        tres = parse_squeue_tres(section("squeue_tres"))  # optional: older squeue may lack the long format
+        for r in rows:
+            if not r.get("gpus") and tres.get(r["job_id"]):
+                r["gpus"] = tres[r["job_id"]]
+        return rows
+
+    def fetch_queue(self, cluster: ClusterConfig) -> list[dict]:
+        """Only the projects' running and waiting jobs (no accounting, sshare or load)."""
+        res = self._run(cluster, project_queue_command(list(cluster.projects)))
+        section, _ = self._sections(res)
+        return self._queue_rows(section)
+
+    def refresh_queue(self, clusters: list[ClusterConfig] | None = None) -> None:
+        """Blocking: re-read the queue of these (default: all) project clusters."""
+        clusters = [c for c in (clusters or self.config.project_clusters) if not self.collector.needs_login(c)]
+        if not clusters:
+            return
+
+        def one(cluster: ClusterConfig) -> None:
+            t0 = time.monotonic()
+            try:
+                rows = self.fetch_queue(cluster)
+            except RemoteError as exc:
+                log.warning("%s queue: %s (%s)", cluster.name, exc, exc.kind)
+                with self._lock:
+                    self.status[cluster.name].update(queue_error=str(exc), queue_fetching=False)
+                    self.version += 1
+                return
+            self.store.record_queue(cluster.name, list(cluster.projects), time.time(), rows)
+            if not cluster.is_local and self.config.persist_connections:
+                touch_last_use(cluster, self.config)
+            with self._lock:
+                self.status[cluster.name].update(queue_error=None, queue_fetching=False, queue_seconds=time.monotonic() - t0)
+                self.version += 1
+
+        with self._lock:
+            for c in clusters:
+                self.status[c.name]["queue_fetching"] = True
+            self.version += 1
+        with ThreadPoolExecutor(max_workers=min(8, len(clusters))) as pool:
+            list(pool.map(one, clusters))
+        try:
+            self.store.save()
+        except OSError as exc:
+            log.error("could not save project store: %s", exc)
+
+    def request_queue_refresh(self, cluster: str | None = None) -> bool:
+        """Start a quick queue refresh in the background; False when nothing matches."""
+        clusters = [c for c in self.config.project_clusters if cluster is None or c.name == cluster]
+        if not clusters or any(self.status[c.name].get("queue_fetching") for c in clusters):
+            return False
+        threading.Thread(target=self.refresh_queue, args=(clusters,), name="omniqueue-project-queue", daemon=True).start()
+        return True
 
     def fetch_backfill(self, cluster: ClusterConfig, start_ts: float, end_ts: float) -> list[dict]:
         """One older chunk of accounting only (no queue, sshare or load)."""
@@ -727,6 +792,8 @@ class ProjectPoller:
                 s["error_kind"] = st["error_kind"]
                 s["warning"] = st["warning"]
                 s["fetching"] = st["fetching"]
+                s["queue_fetching"] = st.get("queue_fetching", False)
+                s["queue_error"] = st.get("queue_error")
                 s["backfilling"] = st["backfilling"]
                 s["coverage_days"] = st["coverage_days"]
                 s["backfill_pending"] = self.backfill_pending(c, now)
