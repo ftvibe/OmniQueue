@@ -20,6 +20,7 @@ class HistoryStore:
         self.retention_days = retention_days
         self._lock = threading.Lock()
         self._jobs: dict[str, Job] = {}
+        self.meta: dict = {"gpu_partitions": {}}  # cluster -> {partition: GPUs per node}, from sinfo
         self._load()
 
     # -- persistence -------------------------------------------------------
@@ -30,6 +31,9 @@ class HistoryStore:
             data = json.loads(self.path.read_text())
         except (OSError, json.JSONDecodeError):
             return
+        if isinstance(data.get("meta"), dict):
+            self.meta.update(data["meta"])
+            self.meta.setdefault("gpu_partitions", {})
         for d in data.get("jobs", []):
             try:
                 job = Job.from_dict(d)
@@ -41,7 +45,7 @@ class HistoryStore:
     def save(self) -> None:
         with self._lock:
             secure_dir(self.path.parent)
-            payload = {"version": 1, "saved_at": time.time(), "jobs": [j.to_dict() for j in self._jobs.values()]}
+            payload = {"version": 1, "saved_at": time.time(), "meta": self.meta, "jobs": [j.to_dict() for j in self._jobs.values()]}
             fd, tmp = tempfile.mkstemp(dir=self.path.parent, prefix=".history-", suffix=".json")
             try:
                 with os.fdopen(fd, "w") as fh:
@@ -90,6 +94,21 @@ class HistoryStore:
     def all_jobs(self) -> list[Job]:
         with self._lock:
             return list(self._jobs.values())
+
+    def set_partition_gres(self, cluster: str, gres: dict[str, int], now: float | None = None) -> None:
+        """Remember which partitions of a cluster have GPUs (and how many per node)."""
+        with self._lock:
+            self.meta.setdefault("gpu_partitions", {})[cluster] = {"checked": now or time.time(), "gpus_per_node": dict(gres)}
+
+    def partition_gres(self, cluster: str) -> dict[str, int]:
+        with self._lock:
+            return dict(self.meta.get("gpu_partitions", {}).get(cluster, {}).get("gpus_per_node", {}))
+
+    def partition_gres_age(self, cluster: str, now: float | None = None) -> float | None:
+        """Seconds since the partition gres was last looked up, None if never."""
+        with self._lock:
+            checked = self.meta.get("gpu_partitions", {}).get(cluster, {}).get("checked")
+        return None if checked is None else (now or time.time()) - checked
 
     def forget(self, key: str) -> bool:
         with self._lock:

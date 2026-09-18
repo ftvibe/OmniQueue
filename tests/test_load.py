@@ -132,13 +132,21 @@ class OnDemandLoad(unittest.TestCase):
             self.assertEqual(by["a"]["filter"], ["main"])
             self.assertIn("show_load", by["b"]["error"])
             self.assertIsNotNone(snap["fetched_at"])
-            # the regular poll must not touch sinfo
+            # the regular poll never runs the load sinfo (node states); it may ask once which
+            # partitions have GPUs (a cheap `sinfo --format=%P|%G`), and not again for hours
+            reply = CommandResult("@@OMNIQUEUE squeue rc=0\n@@OMNIQUEUE sacct rc=0\n@@OMNIQUEUE sinfo_gres rc=0\n", "", 0)
             with mock.patch.object(collector_mod, "connection_alive", return_value=True), \
-                 mock.patch.object(collector_mod, "run_on_cluster",
-                                   return_value=CommandResult("@@OMNIQUEUE squeue rc=0\n@@OMNIQUEUE sacct rc=0\n", "", 0)) as run:
+                 mock.patch.object(collector_mod, "run_on_cluster", return_value=reply) as run:
                 col.refresh()
-            for call in run.call_args_list:
-                self.assertNotIn("sinfo", call[0][1])
+                first = [call[0][1] for call in run.call_args_list]
+                run.reset_mock()
+                col.refresh()
+                second = [call[0][1] for call in run.call_args_list]
+            for cmd in first + second:
+                self.assertNotIn("%D|%T", cmd)  # no node-state sinfo in a poll
+                self.assertNotIn("squeue_all", cmd)
+            self.assertTrue(all("%P|%G" in cmd for cmd in first))
+            self.assertFalse(any("%P|%G" in cmd for cmd in second))
             # not logged in -> no ssh, explained in the record
             with mock.patch.object(collector_mod, "connection_alive", return_value=False), \
                  mock.patch.object(collector_mod, "run_on_cluster") as run:

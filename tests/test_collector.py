@@ -94,12 +94,21 @@ class LocalClusterEndToEnd(unittest.TestCase):
                   "  *) echo bad user >&2; exit 9 ;;\n"
                   "esac\n")
         _fake_bin(self.bin, "sacct", f"cat <<'X'\n{SACCT_OUT}X\n")
-        _fake_bin(self.bin, "sinfo", "printf 'main*|up|10|allocated|320/0/0/320|1-00:00:00|2:16:1|32\\nmain*|up|3|idle|0/96/0/96|1-00:00:00|2:16:1|32\\n'\n")
+        _fake_bin(self.bin, "sinfo",
+                  "case \"$*\" in\n"
+                  "  *'%P|%G'*) printf 'main*|(null)\\ngpu|gpu:a100:4\\ngpu|gpu:a100:8\\n' ;;\n"
+                  "  *) printf 'main*|up|10|allocated|320/0/0/320|1-00:00:00|2:16:1|32\\nmain*|up|3|idle|0/96/0/96|1-00:00:00|2:16:1|32\\n' ;;\n"
+                  "esac\n")
         col = self._collector()
         col.refresh()
         snap = col.snapshot()
         status = snap["clusters"][0]
         self.assertTrue(status["ok"], status)
+        # the first poll also asked sinfo which partitions have GPUs; that is remembered
+        self.assertEqual(col.history.partition_gres("here"), {"main": 0, "gpu": 8})
+        self.assertLess(col.history.partition_gres_age("here"), 60)
+        self.assertTrue(snap["usage"])  # my usage, from the same jobs
+        self.assertEqual(snap["usage"][0]["gpus_per_node"], {"gpu": 8})
         self.assertIsNone(status["warning"])
         self.assertNotIn("partitions", status)  # load is fetched on demand, not with the poll
         col.fetch_load()

@@ -61,6 +61,22 @@ class OwnUsageTests(unittest.TestCase):
         self.assertEqual(p["pending"]["gpu"]["gpus"], 2)  # in-use counts stay in Slurm units
         self.assertEqual(p["gpu_partitions"], ["accel", "gpu"])
 
+    def test_whole_node_gpu_jobs_without_gres(self):
+        # Dardel-style: a job on the gpu partition allocates whole nodes and never asks for a gres,
+        # so Slurm's TRES has no gres/gpu; sinfo says the partition has 4 GPUs per node
+        jobs = [Job("c", "9", "wn", "COMPLETED", account="proj", partition="gpu", nodes=2, cpus=128, start_time=_t(4), end_time=_t(2)),
+                Job("c", "10", "run", "RUNNING", account="proj", partition="gpu", nodes=1, cpus=64, start_time=_t(1))]
+        p = own_usage(_cfg(), {"c": jobs}, now=NOW, gpus_per_node={"c": {"gpu": 4, "main": 0}})[0]
+        self.assertEqual(p["gpu_partitions"], ["gpu"])
+        self.assertEqual(p["usage"]["7"]["gpu"]["jobs"], 2)
+        self.assertEqual(p["usage"]["7"]["cpu"]["jobs"], 0)
+        self.assertAlmostEqual(p["usage"]["7"]["gpu"]["gpu_h"], 2 * 2 * 4 + 1 * 4, delta=0.05)
+        self.assertEqual(p["running"]["gpu"]["gpus"], 4)
+        self.assertEqual(p["gpus_per_node"], {"gpu": 4})
+        # without the sinfo knowledge the same jobs would count as CPU jobs
+        q = own_usage(_cfg(), {"c": jobs}, now=NOW)[0]
+        self.assertEqual(q["usage"]["7"]["cpu"]["jobs"], 2)
+
     def test_threads_per_core(self):
         p = own_usage(_cfg(), {"c": JOBS}, now=NOW, tpc={"c": {"main": 2}})[0]
         self.assertAlmostEqual(p["usage"]["7"]["cpu"]["core_h"], (2 * 64 + 32) / 2, delta=0.5)

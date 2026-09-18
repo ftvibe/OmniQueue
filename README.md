@@ -252,8 +252,12 @@ cluster names from your config, `list --state` the job states.
   when `project_quotas` / `project_gpu_quotas` are set. A job is a GPU job when
   Slurm allocated or requested GPUs for it (`AllocTRES`/`ReqTRES` in `sacct`,
   the gres column and the long-format TRES of `squeue`) or when it runs on a
-  partition listed in `gpu_partitions`; `gpu_hour_factor` converts Slurm GPU
-  units into billed GPU-hours (LUMI-G: 0.5). The first poll of a fresh install
+  GPU partition. GPU partitions are those a cheap `sinfo --format='%P|%G'`
+  reports GPUs for (asked on the first poll and every 6 hours, remembered in
+  the history file) plus the `gpu_partitions` list; a whole-node job on such a
+  partition that never asked for a gres, as on Dardel, counts as nodes x GPUs
+  per node. `gpu_hour_factor` converts Slurm GPU units into billed GPU-hours
+  (LUMI-G: 0.5). The first poll of a fresh install
   asks `sacct` for the whole `history_days` window once, so the 30-day figures
   are complete from the start; afterwards finished jobs stay in the local
   history. The ▾ (or `u`) collapses the row to one pill per project.

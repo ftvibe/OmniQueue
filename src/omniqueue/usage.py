@@ -39,8 +39,12 @@ def _interval(job: Job, now: float) -> tuple[float, float] | None:
 
 
 def own_usage(config: Config, jobs_by_cluster: dict[str, list[Job]], now: float | None = None,
-              tpc: dict[str, dict[str, int]] | None = None, learned_gpu_partitions: dict[str, set[str]] | None = None) -> list[dict[str, Any]]:
-    """One record per (cluster, account) you have jobs in, newest activity first."""
+              tpc: dict[str, dict[str, int]] | None = None, learned_gpu_partitions: dict[str, set[str]] | None = None,
+              gpus_per_node: dict[str, dict[str, int]] | None = None) -> list[dict[str, Any]]:
+    """One record per (cluster, account) you have jobs in, newest activity first.
+
+    `gpus_per_node` (cluster -> partition -> GPUs per node, from sinfo) marks GPU
+    partitions and sizes whole-node jobs that never asked for a gres."""
     now = now or time.time()
     out: list[dict[str, Any]] = []
     clusters: dict[str, ClusterConfig] = {c.name: c for c in config.enabled_clusters}
@@ -48,7 +52,9 @@ def own_usage(config: Config, jobs_by_cluster: dict[str, list[Job]], now: float 
         cfg = clusters.get(cname)
         if cfg is None:
             continue
+        gpn = (gpus_per_node or {}).get(cname, {})
         gpu_parts = set(cfg.gpu_partitions) | set((learned_gpu_partitions or {}).get(cname, set()))
+        gpu_parts.update(part for part, n in gpn.items() if n > 0)
         gpu_parts.update(j.partition for j in jobs if j.gpus and j.partition)
         tpc_map = (tpc or {}).get(cname, {})
         factor = cfg.gpu_hour_factor
@@ -58,6 +64,12 @@ def own_usage(config: Config, jobs_by_cluster: dict[str, list[Job]], now: float 
 
         def kind(j: Job) -> str:
             return "gpu" if j.gpus or j.partition in gpu_parts else "cpu"
+
+        def gpus(j: Job) -> int:
+            """Slurm GPU units of a job; a whole-node job on a GPU partition without a gres gets the node's GPUs."""
+            if j.gpus:
+                return j.gpus
+            return (j.nodes or 1) * gpn.get(j.partition, 0) if j.partition in gpu_parts else 0
 
         by_account: dict[str, list[Job]] = {}
         for j in jobs:
@@ -70,7 +82,7 @@ def own_usage(config: Config, jobs_by_cluster: dict[str, list[Job]], now: float 
 
             def add(b: dict, j: Job, overlap: float) -> None:
                 if kind(j) == "gpu":
-                    b["gpu"]["gpu_h"] += overlap * j.gpus * factor / 3600
+                    b["gpu"]["gpu_h"] += overlap * gpus(j) * factor / 3600
                     b["gpu"]["core_h"] += overlap * cores(j) / 3600
                     b["gpu"]["jobs"] += 1
                 else:
@@ -108,7 +120,7 @@ def own_usage(config: Config, jobs_by_cluster: dict[str, list[Job]], now: float 
                 target[k]["jobs"] += 1
                 target[k]["cores"] += cores(j)
                 if k == "gpu":
-                    target[k]["gpus"] += j.gpus
+                    target[k]["gpus"] += gpus(j)
                 if "nodes" in target[k]:
                     target[k]["nodes"] += j.nodes or 0
             has_gpu = bool(gpu_parts) or usage["30"]["gpu"]["jobs"] > 0 or running["gpu"]["jobs"] > 0 or pending["gpu"]["jobs"] > 0
@@ -117,6 +129,7 @@ def own_usage(config: Config, jobs_by_cluster: dict[str, list[Job]], now: float 
                 "cluster": cname, "account": account, "pi": cfg.project_pis.get(account),
                 "usage": usage, "daily": daily, "running": running, "pending": pending,
                 "has_gpu": has_gpu, "gpu_factor": factor, "gpu_partitions": sorted(gpu_parts),
+                "gpus_per_node": {p: n for p, n in gpn.items() if n > 0},
                 "jobs_known": len(ajobs), "oldest": min(starts) if starts else None,
                 "quota": _quota(cfg.project_quotas.get(account), usage["30"]["cpu"]["core_h"]),
                 "gpu_quota": _quota(cfg.project_gpu_quotas.get(account), usage["30"]["gpu"]["gpu_h"]),

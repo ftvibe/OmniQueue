@@ -12,8 +12,8 @@ from typing import Any
 from .config import ClusterConfig, Config
 from .history import HistoryStore
 from .models import Job
-from .slurm import (apply_tres, combined_command, load_command, merge_jobs, parse_load, parse_sacct, parse_squeue,
-                    parse_squeue_tres, split_combined_output, summarize_load)
+from .slurm import (apply_tres, combined_command, load_command, merge_jobs, parse_load, parse_partition_gres, parse_sacct,
+                    parse_squeue, parse_squeue_tres, split_combined_output, summarize_load)
 from .usage import own_usage
 from .ssh import RemoteError, close_connection, connection_alive, run_on_cluster, touch_last_use
 
@@ -128,7 +128,11 @@ class Collector:
             # a fresh history gets the whole retention window once, so "my usage" starts complete;
             # afterwards only lookback_hours (finished jobs stay in the local store)
             lookback = self.config.lookback_hours if self.history.jobs_for(cluster.name) else self.config.history_days * 24
-            cmd = combined_command(cluster.user, lookback, cluster.squeue_args, cluster.sacct_args, cluster.use_sacct)
+            # which partitions have GPUs: a cheap sinfo, on the first poll and then every 6 h
+            gres_age = self.history.partition_gres_age(cluster.name)
+            want_gres = gres_age is None or gres_age > 6 * 3600
+            cmd = combined_command(cluster.user, lookback, cluster.squeue_args, cluster.sacct_args, cluster.use_sacct,
+                                   with_partition_gres=want_gres)
             res = run_on_cluster(cluster, cmd, self.config.ssh_timeout, self.config)
             sections = split_combined_output(res.stdout)
             stderr = res.stderr.strip()
@@ -141,6 +145,9 @@ class Collector:
             tres_out, tres_rc = sections.get("squeue_tres", ("", -1))
             if tres_rc == 0:
                 apply_tres(squeue_jobs, parse_squeue_tres(tres_out))
+            gres_out, gres_rc = sections.get("sinfo_gres", ("", -1))
+            if want_gres and gres_rc == 0:
+                self.history.set_partition_gres(cluster.name, parse_partition_gres(gres_out))
 
             sacct_jobs: list[Job] = []
             if cluster.use_sacct:
@@ -256,7 +263,8 @@ class Collector:
             jobs = {k: list(v) for k, v in self._jobs.items()}
         tpc = self.tpc_hook() if self.tpc_hook else None
         learned = self.gpu_partitions_hook() if self.gpu_partitions_hook else None
-        return own_usage(self.config, jobs, tpc=tpc, learned_gpu_partitions=learned)
+        gpn = {c.name: self.history.partition_gres(c.name) for c in self.config.enabled_clusters}
+        return own_usage(self.config, jobs, tpc=tpc, learned_gpu_partitions=learned, gpus_per_node=gpn)
 
     def state_etag(self) -> str:
         """Changes whenever a browser would see something new in /api/state."""

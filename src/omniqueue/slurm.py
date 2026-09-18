@@ -107,11 +107,33 @@ def squeue_all_command(partitions: list[str] | None = None) -> str:
             f"{_partition_arg(partitions)}")
 
 
+PARTITION_GRES_FIELDS = "%P|%G"  # partition, gres: which partitions have GPUs, and how many per node
+
+
+def partition_gres_command() -> str:
+    """Cheap sinfo (slurmctld, not the accounting database): partition -> gres."""
+    return f"sinfo --noheader --format={shlex.quote(PARTITION_GRES_FIELDS)}"
+
+
+def parse_partition_gres(output: str) -> dict[str, int]:
+    """partition -> GPUs per node (0 for CPU partitions), largest node type per partition."""
+    out: dict[str, int] = {}
+    for line in output.splitlines():
+        cols = [c.strip() for c in line.split("|")]
+        if len(cols) < 2 or not cols[0]:
+            continue
+        name = cols[0].rstrip("*")
+        out[name] = max(out.get(name, 0), gpus_from_gres(cols[1]))
+    return out
+
+
 def combined_command(user: str | None, lookback_hours: int, squeue_args: list[str] | None,
-                     sacct_args: list[str] | None, use_sacct: bool) -> str:
+                     sacct_args: list[str] | None, use_sacct: bool, with_partition_gres: bool = False) -> str:
     """squeue and sacct in one remote shell invocation, so a poll costs one ssh round trip.
 
-    Each command is followed by a marker line carrying its exit status.
+    Each command is followed by a marker line carrying its exit status.  With
+    `with_partition_gres` a cheap sinfo is added that says which partitions have GPUs
+    (needed to recognise whole-node GPU jobs that never asked for a gres).
     """
     parts = [squeue_command(user, squeue_args), f'echo "{MARK} squeue rc=$?"',
              # the long format is the only squeue output that shows --gpus-per-node requests
@@ -119,6 +141,8 @@ def combined_command(user: str | None, lookback_hours: int, squeue_args: list[st
              f'echo "{MARK} squeue_tres rc=$?"']
     if use_sacct:
         parts += [sacct_command(user, lookback_hours, sacct_args), f'echo "{MARK} sacct rc=$?"']
+    if with_partition_gres:
+        parts += [partition_gres_command(), f'echo "{MARK} sinfo_gres rc=$?"']
     return "; ".join(parts)
 
 
