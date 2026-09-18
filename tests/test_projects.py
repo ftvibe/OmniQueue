@@ -186,10 +186,18 @@ class StoreTests(unittest.TestCase):
             store.save()
             again = ProjectStore(Path(tmp) / "p.json", retention_days=90)
             self.assertEqual(again.oldest("c1"), NOW)  # coverage reset: the back-fill runs again
+            self.assertEqual(again.data["meta"]["schema"], ProjectStore.SCHEMA)
             # a back-fill chunk now overwrites the GPU-less records
             again.record_backfill("c1", ["proj-a"], NOW - 7 * 86400, parse_project_sacct(SACCT_OUT), NOW + 60)
             self.assertEqual(again.jobs("c1", "proj-a")["406"]["gpus"], 4)
             self.assertEqual(again.oldest("c1"), NOW - 7 * 86400)
+            # a restart half-way resumes from the saved progress instead of starting over,
+            # even though some records (never returned by sacct again) still have no gpus field
+            again.jobs("c1", "proj-a")  # noqa: B018 - touch
+            again.data["jobs"]["c1"]["proj-a"]["999"] = {"user": "x", "partition": "main", "state": "COMPLETED", "start": _t(200), "end": _t(199)}
+            again.save()
+            third = ProjectStore(Path(tmp) / "p.json", retention_days=90)
+            self.assertEqual(third.oldest("c1"), NOW - 7 * 86400)
 
     def test_persist_prune_and_load_samples(self):
         with tempfile.TemporaryDirectory() as tmp:

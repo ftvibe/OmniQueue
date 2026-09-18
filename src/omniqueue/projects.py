@@ -68,16 +68,28 @@ class ProjectStore:
             self.data["meta"].setdefault("last_poll", {})
             self._migrate()
 
+    SCHEMA = 2  # bump when stored records need a one-time re-fetch
+
     def _migrate(self) -> None:
-        """Records written before GPUs were tracked have no ``gpus`` field: forget how far
-        back the history was fetched, so the back-fill runs once more and fills them in."""
-        oldest = self.data["meta"].setdefault("oldest", {})
-        for cluster, projects in self.data["jobs"].items():
-            if any("gpus" not in rec for jobs in projects.values() for rec in jobs.values()):
-                last = self.data["meta"]["last_poll"].get(cluster)
-                if last and oldest.get(cluster, 0) < last:
-                    log.info("%s: re-fetching project history to add GPU counts", cluster)
-                    oldest[cluster] = last
+        """One-time upgrades of an existing store, recorded in ``meta.schema`` so they run
+        exactly once; the re-fetch itself proceeds in the usual chunks and its progress
+        (``meta.oldest``) is saved after every chunk, so a restart resumes rather than
+        starting over.
+
+        schema 2: records written before GPUs were tracked have no ``gpus`` field.  The
+        coverage marker is moved to the last poll so the back-fill runs once more and
+        fills them in; records sacct no longer returns simply keep counting as CPU jobs."""
+        meta = self.data["meta"]
+        schema = int(meta.get("schema") or 1)
+        if schema < 2:
+            oldest = meta.setdefault("oldest", {})
+            for cluster, projects in self.data["jobs"].items():
+                if any("gpus" not in rec for jobs in projects.values() for rec in jobs.values()):
+                    last = meta["last_poll"].get(cluster)
+                    if last and oldest.get(cluster, 0) < last:
+                        log.info("%s: re-fetching project history once to add GPU counts", cluster)
+                        oldest[cluster] = last
+        meta["schema"] = self.SCHEMA
 
     def save(self) -> None:
         with self._lock:
