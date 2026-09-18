@@ -161,6 +161,7 @@ network change that dropped the connection.
 | `omniqueue logout [CLUSTER...]` | close the persistent ssh connection(s) now |
 | `omniqueue login --force CLUSTER` | reconnect a cluster whose connection is stale |
 | `omniqueue list [--state running] ...` | poll once and print a table to the terminal |
+| `omniqueue usage [--jobs] [CLUSTER...]` | your own usage per project from the stored history; `--jobs` lists every job with partition, GPUs and its CPU/GPU classification |
 | `omniqueue projects [--poll]` | who runs how much in your projects, from the stored slow poll (`--poll` asks the clusters now) |
 | `omniqueue predict -N 4 -t 12 [-G 4] [-A proj]` | experimental: rank clusters/partitions by estimated queue wait for such a job (`-G` GPUs per node: GPU partitions only) |
 | `omniqueue check` | connect to every cluster once and report problems |

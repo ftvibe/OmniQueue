@@ -374,6 +374,48 @@ def cmd_projects(args) -> int:
     return 0
 
 
+def cmd_usage(args) -> int:
+    """Your own usage per project from the stored history (no cluster access), with the
+    classification of every job when --jobs is given: the place to look when a card
+    shows unexpected numbers."""
+    from .usage import own_usage
+
+    cfg = _load(args)
+    history = HistoryStore(cfg.data_dir / ("history-demo.json" if getattr(args, "demo", False) else "history.json"), cfg.history_days)
+    wanted = set(args.cluster or [])
+    clusters = [c for c in cfg.enabled_clusters if not wanted or c.name in wanted]
+    print(f"mode = {cfg.mode} · history: {history.path} ({len(history.all_jobs())} jobs)")
+    jobs_by = {c.name: history.jobs_for(c.name) for c in clusters}
+    gpn = {c.name: history.partition_gres(c.name) for c in clusters}
+    for c in clusters:
+        age = history.partition_gres_age(c.name)
+        print(f"\n== {c.name}: {len(jobs_by[c.name])} jobs stored · gpu_partitions = {c.gpu_partitions} · gpus_per_node = {c.gpus_per_node} "
+              f"· gpu_hour_factor = {c.gpu_hour_factor:g}")
+        print(f"   sinfo gres: {gpn[c.name] or 'not fetched yet'}" + (f" (checked {age / 3600:.1f} h ago)" if age is not None else ""))
+    records = own_usage(cfg, jobs_by, gpus_per_node=gpn)
+    if not records:
+        print("\nno usage records: the history holds no jobs with an account for these clusters")
+    for r in records:
+        u30, u7 = r["usage"]["30"], r["usage"]["7"]
+        print(f"\n-- {r['cluster']} / {r['account']}" + (f" ({r['pi']})" if r["pi"] else "") +
+              f": GPU partitions {r['gpu_partitions']} · GPUs per node {r['gpus_per_node']}")
+        print(f"   CPU: {u30['cpu']['core_h']:,.0f} core-h in {u30['cpu']['jobs']} jobs (30 d), {u7['cpu']['core_h']:,.0f} (7 d) · "
+              f"now {r['running']['cpu']['jobs']} running / {r['pending']['cpu']['jobs']} waiting")
+        print(f"   GPU: {u30['gpu']['gpu_h']:,.1f} GPU-h in {u30['gpu']['jobs']} jobs (30 d), {u7['gpu']['gpu_h']:,.1f} (7 d) · "
+              f"now {r['running']['gpu']['jobs']} running ({r['running']['gpu']['gpus']} GPUs) / {r['pending']['gpu']['jobs']} waiting")
+    if args.jobs:
+        print(f"\n{'CLUSTER':<12} {'JOBID':<14} {'ACCOUNT':<18} {'PARTITION':<12} {'STATE':<11} {'NODES':>5} {'CPUS':>5} {'GPUS':>5} {'KIND':<4} START")
+        by_cluster_parts = {r["cluster"]: (set(r["gpu_partitions"]), r["gpus_per_node"]) for r in records}
+        for c in clusters:
+            parts, sizes = by_cluster_parts.get(c.name, (set(c.gpu_partitions) | set(c.gpus_per_node), dict(c.gpus_per_node)))
+            for j in sorted(jobs_by[c.name], key=lambda j: j.start_time or j.submit_time, reverse=True):
+                kind = "gpu" if j.gpus or j.partition in parts else "cpu"
+                gpus = j.gpus or ((j.nodes or 1) * sizes.get(j.partition, 0) if kind == "gpu" else 0)
+                print(f"{c.name:<12} {j.job_id:<14} {(j.account or '?'):<18} {j.partition:<12} {j.state:<11} {j.nodes:>5} {j.cpus:>5} "
+                      f"{gpus:>5} {kind:<4} {j.start_time or ('(pending)' if j.state == 'PENDING' else '-')}")
+    return 0
+
+
 def cmd_predict(args) -> int:
     """Experimental: rank clusters/partitions by estimated queue wait, from the stored samples."""
     from .predict import Request, explain, predict
@@ -399,7 +441,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-v", "--verbose", action="store_true", help="debug logging")
     p.add_argument("--version", action="version", version=f"omniqueue {__version__}")
     sub = p.add_subparsers(dest="command", required=True,
-                           metavar="{init,monitor,serve,login,active,logout,list,projects,predict,check,completion}")
+                           metavar="{init,monitor,serve,login,active,logout,list,usage,projects,predict,check,completion}")
 
     s = sub.add_parser("init", help="write an example config file")
     s.add_argument("--force", action="store_true", help="overwrite an existing config")
@@ -443,6 +485,11 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("projects", help="show who runs how much in your projects (from the slow background poll)")
     s.add_argument("--poll", action="store_true", help="poll the clusters now instead of showing the stored data")
     s.set_defaults(func=cmd_projects)
+
+    s = sub.add_parser("usage", help="your own usage per project from the stored history; --jobs shows how each job was classified")
+    s.add_argument("cluster", nargs="*", help="only these clusters (default: all)")
+    s.add_argument("--jobs", action="store_true", help="list every stored job with partition, GPUs and CPU/GPU classification")
+    s.set_defaults(func=cmd_usage)
 
     s = sub.add_parser("predict", help="experimental: where would a job start fastest?")
     s.add_argument("--nodes", "-N", type=int, default=1, help="nodes the job needs (default 1)")
