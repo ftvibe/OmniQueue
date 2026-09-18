@@ -15,7 +15,7 @@ class ServerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
-        cfg = demo_config()
+        cfg = demo_config(mode="pi")  # the project endpoints need pi mode whatever the branch default
         cls.collector = DemoCollector(cfg, HistoryStore(Path(cls.tmp.name) / "h.json"))
         cls.collector.refresh()
         cls.projects = DemoProjectPoller(cfg, ProjectStore(Path(cls.tmp.name) / "p.json"), cls.collector)

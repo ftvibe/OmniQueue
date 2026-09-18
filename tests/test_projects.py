@@ -259,7 +259,7 @@ class PollerTests(unittest.TestCase):
 
     def _poller(self, history_days=90, **kw):
         kw.setdefault("project_pis", {"proj-a": "Prof. X"})
-        cfg = Config(clusters=[ClusterConfig(name="here", host="local", projects=["proj-a"], **kw)],
+        cfg = Config(mode="pi", clusters=[ClusterConfig(name="here", host="local", projects=["proj-a"], **kw)],
                      data_dir=Path(self.tmp.name), persist_connections=False, project_refresh_seconds=3600,
                      project_history_days=history_days, project_backfill_days=7)
         collector = Collector(cfg, HistoryStore(Path(self.tmp.name) / "h.json"))
@@ -375,7 +375,7 @@ class PollerTests(unittest.TestCase):
 
 class ConfigTests(unittest.TestCase):
     def test_project_keys(self):
-        cfg = config_from_dict({"project_refresh_seconds": 3600, "clusters": [
+        cfg = config_from_dict({"mode": "pi", "project_refresh_seconds": 3600, "clusters": [
             {"name": "a", "host": "a", "projects": ["p1", "p2"], "project_quotas": {"p1": 5000}, "project_refresh_seconds": 900, "nice": 10},
             {"name": "b", "host": "b"},
         ]})

@@ -176,7 +176,8 @@ class DemoCollector(Collector):
         return jobs, status
 
 
-def demo_config() -> Config:
+def demo_config(mode: str | None = None) -> Config:
+    """Fabricated clusters; `mode` defaults to the branch's DEFAULT_MODE."""
     import tempfile
     from pathlib import Path
 
@@ -186,7 +187,10 @@ def demo_config() -> Config:
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" fill="#053229"/>'
         '<path d="M12 27 20 11l8 16z" fill="#8fb8b4"/><circle cx="20" cy="24" r="3" fill="#e2856c"/></svg>'
     )
+    from .config import DEFAULT_MODE
+
     return Config(
+        mode=mode or DEFAULT_MODE,
         logo_dir=logo_dir,
         clusters=[
             ClusterConfig(name="tetralith", host="tetralith.nsc.liu.se", color="#5f9e99", projects=["naiss2025-1-42", "naiss2025-22-8"],
