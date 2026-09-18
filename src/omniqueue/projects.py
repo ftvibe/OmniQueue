@@ -84,11 +84,20 @@ class ProjectStore:
         if schema < 2:
             oldest = meta.setdefault("oldest", {})
             for cluster, projects in self.data["jobs"].items():
-                if any("gpus" not in rec for jobs in projects.values() for rec in jobs.values()):
-                    last = meta["last_poll"].get(cluster)
-                    if last and oldest.get(cluster, 0) < last:
-                        log.info("%s: re-fetching project history once to add GPU counts", cluster)
-                        oldest[cluster] = last
+                missing = [rec for jobs in projects.values() for rec in jobs.values() if "gpus" not in rec]
+                if not missing:
+                    continue
+                last = meta["last_poll"].get(cluster)
+                marker = oldest.get(cluster)
+                # a re-fetch started by an earlier version is under way when every record still
+                # lacking the field lies beyond the marker: keep the marker and simply resume
+                if marker is not None and last and marker < last and all(
+                        (slurm_ts(rec.get("start")) or slurm_ts(rec.get("submit")) or 0) < marker + 86400 for rec in missing):
+                    log.info("%s: resuming the GPU re-fetch of the project history", cluster)
+                    continue
+                if last and (marker or 0) < last:
+                    log.info("%s: re-fetching project history once to add GPU counts", cluster)
+                    oldest[cluster] = last
         meta["schema"] = self.SCHEMA
 
     def save(self) -> None:

@@ -198,6 +198,13 @@ class StoreTests(unittest.TestCase):
             again.save()
             third = ProjectStore(Path(tmp) / "p.json", retention_days=90)
             self.assertEqual(third.oldest("c1"), NOW - 7 * 86400)
+            # a store from the version before the schema flag, with the re-fetch half done: the
+            # newer records have gpus, the older ones do not, the marker sits between -> resume
+            del third.data["meta"]["schema"]
+            third.save()
+            fourth = ProjectStore(Path(tmp) / "p.json", retention_days=90)
+            self.assertEqual(fourth.oldest("c1"), NOW - 7 * 86400)
+            self.assertEqual(fourth.data["meta"]["schema"], ProjectStore.SCHEMA)
 
     def test_persist_prune_and_load_samples(self):
         with tempfile.TemporaryDirectory() as tmp:
