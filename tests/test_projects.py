@@ -282,6 +282,8 @@ class PollerTests(unittest.TestCase):
         # a later regular poll asks only for the time since the previous one (plus a day)
         store.data["meta"]["last_poll"]["here"] = time.time() - 7200
         self.assertAlmostEqual(time.time() - poller.window_start(cluster, time.time()), 7200 + 86400, delta=5)
+        poller.config.project_overlap_hours = 48
+        self.assertAlmostEqual(time.time() - poller.window_start(cluster, time.time()), 7200 + 2 * 86400, delta=5)
         snap = poller.snapshot()
         self.assertFalse(snap["projects"][0]["backfill_pending"])
         self.assertAlmostEqual(snap["projects"][0]["coverage_days"], 20, delta=0.1)

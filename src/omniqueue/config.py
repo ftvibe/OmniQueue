@@ -70,6 +70,7 @@ class Config:
     project_history_days: int = 90  # how long project jobs and load samples are kept for the rolling overview
     project_timeout: int = 300  # seconds allowed for one project poll (sacct over many users is slow)
     project_backfill_days: int = 7  # older history is fetched in chunks of this many days, one chunk a minute
+    project_overlap_hours: int = 24  # each poll re-asks sacct for this much before the previous poll (late accounting)
     listen_host: str = "127.0.0.1"
     listen_port: int = 8765
     data_dir: Path = field(default_factory=default_data_dir)
@@ -130,6 +131,7 @@ project_refresh_seconds = 7200  # project usage / fairshare / load samples: slow
 project_history_days = 90       # project jobs and load samples kept this long for the rolling overview
 project_timeout = 300           # seconds one project poll may take (sacct over all users is slow)
 project_backfill_days = 7       # after the first poll, older history arrives in chunks of this many days
+project_overlap_hours = 24      # each poll re-reads this much before the previous poll, in case accounting was late
 listen_host     = "127.0.0.1"   # keep it local; put Tailscale/ssh -L in front for remote viewing
 listen_port     = 8765
 # allow_remote  = true          # only with an access_token; every request must carry it
@@ -287,7 +289,7 @@ def config_from_dict(raw: dict) -> Config:
     cfg = Config(clusters=clusters)
     for key in ("refresh_seconds", "lookback_hours", "history_days", "ssh_timeout", "listen_port",
                 "persist_seconds", "keepalive_seconds", "retry_seconds", "project_refresh_seconds", "project_history_days",
-                "project_timeout", "project_backfill_days"):
+                "project_timeout", "project_backfill_days", "project_overlap_hours"):
         if key in raw:
             try:
                 setattr(cfg, key, int(raw[key]))
@@ -312,6 +314,8 @@ def config_from_dict(raw: dict) -> Config:
         raise ConfigError("`project_refresh_seconds` must be at least 300 (this is a slow, all-users query).")
     if cfg.project_backfill_days < 1:
         raise ConfigError("`project_backfill_days` must be at least 1.")
+    if cfg.project_overlap_hours < 1:
+        raise ConfigError("`project_overlap_hours` must be at least 1.")
     if not cfg.listens_locally:
         if not cfg.allow_remote:
             raise ConfigError(

@@ -527,11 +527,15 @@ class ProjectPoller:
 
     def window_start(self, cluster: ClusterConfig, now: float) -> float:
         """Where this poll's sacct window begins: the first poll takes FIRST_DAYS, later
-        ones the time since the previous poll plus a day of slack for late accounting."""
+        ones the time since the previous poll plus `project_overlap_hours` of slack, so
+        accounting records that arrived late are picked up.  Everything older is already
+        in the local store and is never asked for again (sacct lists a job whenever it
+        was active at any moment of the window, so a job that was running at the last
+        poll and has finished since is included without any overlap)."""
         last = self.store.last_poll(cluster.name)
         if last is None:
             return now - self.FIRST_DAYS * 86400
-        return max(now - self.config.project_history_days * 86400, last - 86400)
+        return max(now - self.config.project_history_days * 86400, last - self.config.project_overlap_hours * 3600)
 
     def fetch(self, cluster: ClusterConfig, start_ts: float) -> tuple[list[dict], list[dict], list[dict], list[dict], list[str]]:
         """Run the combined command with an sacct window from `start_ts` to now.

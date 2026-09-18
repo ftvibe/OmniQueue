@@ -57,6 +57,7 @@ project_refresh_seconds = 7200  # slow background poll of project usage / fairsh
 project_history_days = 90       # how long project jobs and load samples are kept
 project_timeout = 300           # one project poll may take this long (sacct over all users is slow)
 project_backfill_days = 7       # older history arrives in chunks of this many days after the first poll
+project_overlap_hours = 24      # each poll re-reads this much before the previous poll (late accounting)
 listen_host     = "127.0.0.1"
 listen_port     = 8765
 
@@ -325,7 +326,11 @@ same `sinfo` + all-users `squeue` the load view uses. Everything lands in
 `~/.local/share/omniqueue/projects.json`: project jobs are stored individually
 and kept for `project_history_days` (90 by default), so the rolling overview
 outlives Slurm's own accounting window and a restart never re-fetches history.
-Only the slice since the last poll is requested each time. `sacct` over every
+Each poll asks `sacct` only for the window from the previous poll minus
+`project_overlap_hours` (24) to now, so late accounting records are picked up
+and nothing older is transferred twice; `sacct` lists a job whenever it was
+active at any moment of that window, so a job that was running at the last
+poll and has finished since is updated without any overlap. `sacct` over every
 user of a project is slow on a busy accounting database, so the first poll asks
 for three days only and the rest of `project_history_days` is back-filled in
 `project_backfill_days` chunks one minute apart (the card says "loading history:
