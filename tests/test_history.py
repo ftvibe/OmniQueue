@@ -70,12 +70,19 @@ class RefetchTests(unittest.TestCase):
             new = {"cluster": "d", "job_id": "2", "name": "b", "state": "COMPLETED", "last_seen": 1.0, "gpus": 0}
             path.write_text(json.dumps({"version": 1, "jobs": [old, new]}))
             store = HistoryStore(path, retention_days=10 ** 6)
-            self.assertTrue(store.needs_refetch("c"))
-            self.assertFalse(store.needs_refetch("d"))
-            store.refetched("c")
-            self.assertFalse(store.needs_refetch("c"))
+            self.assertIsNone(store.covered_since("c"))  # the back-fill will run again for c ...
+            store.set_covered_since("d", 5.0)
+            # ... and a chunk replaces the GPU-less record while keeping fresher ones
+            from omniqueue.models import Job
+
+            changed = store.add_older("c", [Job("c", "1", "a", "COMPLETED", gpus=4, last_seen=2.0), Job("c", "9", "n", "COMPLETED", last_seen=2.0)])
+            self.assertEqual(changed, 2)
+            self.assertEqual({j.job_id: j.gpus for j in store.jobs_for("c")}, {"1": 4, "9": 0})
+            self.assertEqual(store.add_older("c", [Job("c", "1", "a", "FAILED", last_seen=3.0)]), 0)  # fresher record kept
             store.save()
-            self.assertFalse(HistoryStore(path, retention_days=10 ** 6).needs_refetch("c"))  # saved records carry the field
+            again = HistoryStore(path, retention_days=10 ** 6)
+            self.assertEqual(again.covered_since("d"), 5.0)
+            self.assertEqual(again.jobs_for("c")[0].state if len(again.jobs_for("c")) == 1 else "ok", "ok")
 
 
 if __name__ == "__main__":

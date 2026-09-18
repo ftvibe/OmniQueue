@@ -46,7 +46,7 @@ omniqueue --demo monitor
 ```toml
 # mode = "pi"             # "user": your jobs and your usage per project; "pi": also whole projects
 refresh_seconds = 60      # how often every cluster is polled
-lookback_hours  = 72      # how far back sacct is asked for finished jobs (the first poll takes history_days)
+lookback_hours  = 72      # how far back sacct is asked for finished jobs (older history arrives in chunks)
 history_days    = 30      # finished jobs stay in the local history this long
 ssh_timeout     = 20
 persist_connections = true   # keep one ssh connection per cluster open between polls
@@ -261,10 +261,12 @@ cluster names from your config, `list --state` the job states.
   per node. Where `sinfo` reports no gres at all, `gpus_per_node = { gpu = 4 }`
   states the node size (it also marks the partition as a GPU one).
   `gpu_hour_factor` converts Slurm GPU units into billed GPU-hours (LUMI-G:
-  0.5). The first poll of a fresh install
-  asks `sacct` for the whole `history_days` window once, so the 30-day figures
-  are complete from the start; afterwards finished jobs stay in the local
-  history. The ▾ (or `u`) collapses the row to one pill per project.
+  0.5). The poll itself only ever asks for `lookback_hours`; older history for
+  this row is fetched afterwards in 7-day chunks, one per cluster per minute,
+  with the long `project_timeout`, until `history_days` are covered (the row's
+  header shows the progress). A slow accounting database therefore cannot
+  stall the poll, and finished jobs stay in the local history from then on.
+  The ▾ (or `u`) collapses the row to one pill per project.
 * **GPUs on your jobs** show as a small tag next to the node count and in the
   job details.
 * **Project cards** (mode `pi` only) appear below for every project listed in

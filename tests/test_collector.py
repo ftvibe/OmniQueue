@@ -120,6 +120,59 @@ class LocalClusterEndToEnd(unittest.TestCase):
         self.assertEqual(status["counts"], {"running": 1, "pending": 2, "ok": 1, "problem": 4, "unknown": 0})
         self.assertEqual(len(snap["jobs"]), 8)
 
+    def test_own_history_backfills_in_chunks(self):
+        log = Path(self.tmp.name) / "sacct.log"
+        _fake_bin(self.bin, "squeue", f"cat <<'X'\n{SQUEUE_OUT}X\n")
+        _fake_bin(self.bin, "sacct", f"echo \"$*\" >> {log}; cat <<'X'\n{SACCT_OUT}X\n")
+        _fake_bin(self.bin, "sinfo", "printf 'main*|(null)\\n'\n")
+        col = self._collector()
+        col.config.history_days = 20
+        col.config.lookback_hours = 72
+        col.refresh()
+        cluster = col.config.clusters[0]
+        # the poll asked for the short window only; the marker starts there
+        first = log.read_text().splitlines()[0]
+        self.assertIn("--endtime=now", first)
+        self.assertAlmostEqual(col.history_coverage_days(cluster), 3, delta=0.01)
+        self.assertTrue(col.backfill_pending(cluster))
+        self.assertLessEqual(col.next_delay(), col.BACKFILL_GAP)
+        # chunks: 7 days each, explicit window, until history_days is covered
+        col.backfill_step()
+        self.assertAlmostEqual(col.history_coverage_days(cluster), 10, delta=0.01)
+        chunk = log.read_text().splitlines()[1]
+        self.assertNotIn("--endtime=now", chunk)
+        self.assertIn("--starttime=", chunk)
+        col._backfill_last.clear()
+        col.backfill_step()
+        col._backfill_last.clear()
+        col.backfill_step()
+        self.assertAlmostEqual(col.history_coverage_days(cluster), 20, delta=0.01)
+        self.assertFalse(col.backfill_pending(cluster))
+        self.assertEqual(len(log.read_text().splitlines()), 4)
+        col._backfill_last.clear()
+        col.backfill_step()  # nothing left to do
+        self.assertEqual(len(log.read_text().splitlines()), 4)
+        snap = col.snapshot()
+        self.assertEqual(snap["history_coverage"]["here"], {"days": 20.0, "pending": False})
+        # a restart keeps the marker
+        col.history.save()
+        again = HistoryStore(col.history.path)
+        self.assertEqual(again.covered_since("here"), col.history.covered_since("here"))
+
+    def test_backfill_gives_up_after_three_failures(self):
+        _fake_bin(self.bin, "squeue", f"cat <<'X'\n{SQUEUE_OUT}X\n")
+        _fake_bin(self.bin, "sacct", f"case \"$*\" in *--endtime=now*) cat <<'X'\n{SACCT_OUT}X\n ;; *) echo slow >&2; exit 1 ;; esac\n")
+        _fake_bin(self.bin, "sinfo", "printf 'main*|(null)\\n'\n")
+        col = self._collector()
+        col.refresh()
+        cluster = col.config.clusters[0]
+        for _ in range(3):
+            col._backfill_last.clear()
+            col.backfill_step()
+        self.assertFalse(col.backfill_pending(cluster))  # stopped trying; the poll itself is unaffected
+        self.assertAlmostEqual(col.history_coverage_days(cluster), 3, delta=0.01)
+        self.assertEqual(col.next_delay(), float(col.config.refresh_seconds))
+
     def test_squeue_failure_is_an_error(self):
         _fake_bin(self.bin, "squeue", "echo 'slurm_load_jobs error: Unable to contact slurm controller' >&2; exit 1\n")
         _fake_bin(self.bin, "sacct", "exit 0\n")

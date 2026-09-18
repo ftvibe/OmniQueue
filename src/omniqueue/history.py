@@ -20,7 +20,8 @@ class HistoryStore:
         self.retention_days = retention_days
         self._lock = threading.Lock()
         self._jobs: dict[str, Job] = {}
-        self.meta: dict = {"gpu_partitions": {}}  # cluster -> {partition: GPUs per node}, from sinfo
+        self.meta: dict = {"gpu_partitions": {}, "covered": {}}  # covered: cluster -> how far back sacct has been asked
+        self._stale: set[str] = set()  # job keys written before GPUs were tracked
         self._load()
 
     # -- persistence -------------------------------------------------------
@@ -34,7 +35,8 @@ class HistoryStore:
         if isinstance(data.get("meta"), dict):
             self.meta.update(data["meta"])
             self.meta.setdefault("gpu_partitions", {})
-        stale: set[str] = set()
+            self.meta.setdefault("covered", {})
+        stale_clusters: set[str] = set()
         for d in data.get("jobs", []):
             try:
                 job = Job.from_dict(d)
@@ -43,9 +45,10 @@ class HistoryStore:
             job.source = "history"
             self._jobs[job.key] = job
             if "gpus" not in d:  # written before GPUs were tracked
-                stale.add(job.cluster)
-        if stale:  # ask sacct for the whole window once more, so those jobs get their GPU counts
-            self.meta["refetch"] = sorted(set(self.meta.get("refetch", [])) | stale)
+                self._stale.add(job.key)
+                stale_clusters.add(job.cluster)
+        for cluster in stale_clusters:  # the back-fill runs once more for these and replaces the stale records
+            self.meta["covered"].pop(cluster, None)
 
     def save(self) -> None:
         with self._lock:
@@ -100,14 +103,29 @@ class HistoryStore:
         with self._lock:
             return list(self._jobs.values())
 
-    def needs_refetch(self, cluster: str) -> bool:
-        """True when this cluster's stored jobs predate a field the poll now fills in."""
+    # -- older history, fetched in chunks after the regular poll ------------------------
+    def covered_since(self, cluster: str) -> float | None:
+        """Unix time back to which your own accounting has been fetched; None before the first poll."""
         with self._lock:
-            return cluster in self.meta.get("refetch", [])
+            return self.meta.setdefault("covered", {}).get(cluster)
 
-    def refetched(self, cluster: str) -> None:
+    def set_covered_since(self, cluster: str, ts: float) -> None:
         with self._lock:
-            self.meta["refetch"] = [c for c in self.meta.get("refetch", []) if c != cluster]
+            cur = self.meta.setdefault("covered", {}).get(cluster)
+            self.meta["covered"][cluster] = ts if cur is None else min(cur, ts)
+
+    def add_older(self, cluster: str, jobs: list[Job]) -> int:
+        """Merge a back-fill chunk: new jobs are added, records written before GPUs were
+        tracked are replaced, anything fresher is kept.  Returns how many changed."""
+        changed = 0
+        with self._lock:
+            for j in jobs:
+                if j.key not in self._jobs or j.key in self._stale:
+                    j.source = "sacct"
+                    self._jobs[j.key] = j
+                    self._stale.discard(j.key)
+                    changed += 1
+        return changed
 
     def set_partition_gres(self, cluster: str, gres: dict[str, int], now: float | None = None) -> None:
         """Remember which partitions of a cluster have GPUs (and how many per node)."""

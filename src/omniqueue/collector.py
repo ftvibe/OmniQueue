@@ -12,8 +12,8 @@ from typing import Any
 from .config import ClusterConfig, Config
 from .history import HistoryStore
 from .models import Job
-from .slurm import (apply_tres, combined_command, load_command, merge_jobs, parse_load, parse_partition_gres, parse_sacct,
-                    parse_squeue, parse_squeue_tres, split_combined_output, summarize_load)
+from .slurm import (apply_tres, combined_command, load_command, merge_jobs, own_backfill_command, parse_load,
+                    parse_partition_gres, parse_sacct, parse_squeue, parse_squeue_tres, split_combined_output, summarize_load)
 from .usage import own_usage
 from .ssh import RemoteError, close_connection, connection_alive, run_on_cluster, touch_last_use
 
@@ -58,6 +58,8 @@ class Collector:
         self.refreshing = False
         self._conn_cache: dict[str, tuple[float, bool]] = {}
         self.conn_cache_seconds = 10.0
+        self._backfill_last: dict[str, float] = {}
+        self._backfill_failures: dict[str, int] = {}
         # pages currently watching: client id -> (last heartbeat, wanted interval; 0 = config default)
         self._viewers: dict[str, tuple[float, float]] = {}
         # cluster load view: fetched on demand, never as part of the regular poll
@@ -125,10 +127,9 @@ class Collector:
         t0 = time.monotonic()
         warnings: list[str] = []
         try:
-            # a fresh history gets the whole retention window once, so "my usage" starts complete;
-            # afterwards only lookback_hours (finished jobs stay in the local store)
-            full = not self.history.jobs_for(cluster.name) or self.history.needs_refetch(cluster.name)
-            lookback = self.config.history_days * 24 if full else self.config.lookback_hours
+            # the poll itself stays short (lookback_hours); older history for "my usage" arrives
+            # afterwards in chunks (backfill_step), so a slow accounting database cannot stall it
+            lookback = self.config.lookback_hours
             # which partitions have GPUs: a cheap sinfo, on the first poll and then every 6 h
             gres_age = self.history.partition_gres_age(cluster.name)
             want_gres = gres_age is None or gres_age > 6 * 3600
@@ -174,8 +175,8 @@ class Collector:
 
         merged = merge_jobs(squeue_jobs, sacct_jobs)
         jobs = self.history.update_cluster(cluster.name, merged)
-        if full and cluster.use_sacct:
-            self.history.refetched(cluster.name)
+        if cluster.use_sacct and self.history.covered_since(cluster.name) is None:
+            self.history.set_covered_since(cluster.name, status.last_attempt - lookback * 3600)
         status.ok = True
         status.error = None
         status.error_kind = None
@@ -187,6 +188,69 @@ class Collector:
         status.last_success = time.time()
         status.poll_seconds = time.monotonic() - t0
         return jobs, status
+
+    # -- older own history, one chunk per cluster per loop turn ---------------------------
+    BACKFILL_DAYS = 7
+    BACKFILL_GAP = 60.0
+
+    def backfill_pending(self, cluster: ClusterConfig, now: float | None = None) -> bool:
+        now = now or time.time()
+        covered = self.history.covered_since(cluster.name)
+        return (cluster.use_sacct and covered is not None
+                and covered > now - self.config.history_days * 86400 + 3600
+                and self._backfill_failures.get(cluster.name, 0) < 3)
+
+    def history_coverage_days(self, cluster: ClusterConfig, now: float | None = None) -> float | None:
+        now = now or time.time()
+        covered = self.history.covered_since(cluster.name)
+        return None if covered is None else min(self.config.history_days, (now - covered) / 86400)
+
+    def backfill_step(self) -> None:
+        """Fetch one older chunk of your own accounting for every cluster that still lacks
+        history, with the long timeout; chunks for one cluster are at least BACKFILL_GAP apart."""
+        now = time.time()
+        due = [c for c in self.config.enabled_clusters if self.backfill_pending(c, now)
+               and now - self._backfill_last.get(c.name, 0) >= self.BACKFILL_GAP
+               and self._status[c.name].ok and not self._needs_login(c)]
+        if not due:
+            return
+        with ThreadPoolExecutor(max_workers=min(8, len(due))) as pool:
+            list(pool.map(self._backfill_chunk, due))
+        try:
+            self.history.save()
+        except OSError as exc:
+            log.error("could not save history: %s", exc)
+
+    def _backfill_chunk(self, cluster: ClusterConfig) -> None:
+        now = time.time()
+        self._backfill_last[cluster.name] = now
+        end_ts = self.history.covered_since(cluster.name)
+        start_ts = max(end_ts - self.BACKFILL_DAYS * 86400, now - self.config.history_days * 86400)
+        cmd = own_backfill_command(cluster.user, start_ts, end_ts, cluster.sacct_args)
+        try:
+            res = run_on_cluster(cluster, cmd, max(self.config.ssh_timeout, self.config.project_timeout), self.config)
+        except RemoteError as exc:
+            self._backfill_failures[cluster.name] = self._backfill_failures.get(cluster.name, 0) + 1
+            log.warning("%s: history back-fill chunk failed (%s); %d of 3 attempts", cluster.name, exc,
+                        self._backfill_failures[cluster.name])
+            if exc.kind in ("timeout", "network"):
+                close_connection(cluster, self.config)
+            return
+        out, rc = split_combined_output(res.stdout).get("sacct", ("", -1))
+        if rc != 0:
+            self._backfill_failures[cluster.name] = self._backfill_failures.get(cluster.name, 0) + 1
+            log.warning("%s: history back-fill sacct exited %s: %s", cluster.name, rc, res.stderr.strip()[:200])
+            return
+        added = self.history.add_older(cluster.name, parse_sacct(out, cluster.name, now))
+        self.history.set_covered_since(cluster.name, start_ts)
+        self._backfill_failures.pop(cluster.name, None)
+        if not cluster.is_local and self.config.persist_connections:
+            touch_last_use(cluster, self.config)
+        log.info("%s: history back-filled to %.0f days (%d jobs added)", cluster.name, self.history_coverage_days(cluster) or 0, added)
+        with self._lock:  # the dashboard reads jobs from the collector's copy
+            self._jobs[cluster.name] = self.history.jobs_for(cluster.name)
+            self._status[cluster.name].counts = _count(self._jobs[cluster.name])
+            self.last_refresh = time.time()
 
     # -- cluster load (on demand) --------------------------------------------------
     def fetch_load_cluster(self, cluster: ClusterConfig) -> dict[str, Any]:
@@ -338,8 +402,11 @@ class Collector:
 
     def next_delay(self) -> float:
         """Seconds until the next poll: the interval the viewers imply, or a quick retry
-        (retry_seconds doubling per consecutive failure) while any cluster is failing."""
+        (retry_seconds doubling per consecutive failure) while any cluster is failing.
+        While older history is still being back-filled, at most a minute."""
         base = self.effective_refresh()
+        if any(self.backfill_pending(c) for c in self.config.enabled_clusters):
+            base = min(base, self.BACKFILL_GAP)
         failing = [s.failures for s in self._status.values() if not s.ok and s.failures]
         if not failing:
             return base
@@ -350,6 +417,7 @@ class Collector:
         while not self._stop.is_set():
             try:
                 self.refresh()
+                self.backfill_step()
             except Exception:  # noqa: BLE001 - keep the poller alive whatever happens
                 log.exception("refresh failed")
             delay = self.next_delay()
@@ -381,6 +449,8 @@ class Collector:
             "lookback_hours": self.config.lookback_hours,
             "history_days": self.config.history_days,
             "mode": self.config.mode,
+            "history_coverage": {c.name: {"days": self.history_coverage_days(c), "pending": self.backfill_pending(c)}
+                                 for c in self.config.enabled_clusters if c.use_sacct},
             "clusters": clusters,
             "jobs": jobs,
             "usage": self.usage(),

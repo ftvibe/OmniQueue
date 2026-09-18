@@ -70,8 +70,14 @@ def squeue_command(user: str | None, extra_args: list[str] | None = None) -> str
     return " ".join(parts)
 
 
-def sacct_command(user: str | None, lookback_hours: int, extra_args: list[str] | None = None) -> str:
-    start = (datetime.now() - timedelta(hours=lookback_hours)).strftime("%Y-%m-%dT%H:%M:%S")
+def sacct_command(user: str | None, lookback_hours: int, extra_args: list[str] | None = None,
+                  start_ts: float | None = None, end_ts: float | None = None) -> str:
+    """Your own accounting: the last `lookback_hours`, or an explicit window (back-fill)."""
+    if start_ts is not None:
+        start = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(start_ts))
+    else:
+        start = (datetime.now() - timedelta(hours=lookback_hours)).strftime("%Y-%m-%dT%H:%M:%S")
+    end = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(end_ts)) if end_ts is not None else "now"
     parts = [
         "sacct",
         "--noheader",
@@ -79,11 +85,16 @@ def sacct_command(user: str | None, lookback_hours: int, extra_args: list[str] |
         "--allocations",
         f"--user={_user_arg(user)}",
         f"--starttime={start}",
-        "--endtime=now",
+        f"--endtime={end}",
         f"--format={','.join(SACCT_FIELDS)}",
     ]
     parts += [shlex.quote(a) for a in (extra_args or [])]
     return " ".join(parts)
+
+
+def own_backfill_command(user: str | None, start_ts: float, end_ts: float, extra_args: list[str] | None = None) -> str:
+    """One older chunk of your own accounting, nothing else."""
+    return f"{sacct_command(user, 0, extra_args, start_ts=start_ts, end_ts=end_ts)}; echo \"{MARK} sacct rc=$?\""
 
 
 MARK = "@@OMNIQUEUE"

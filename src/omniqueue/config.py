@@ -129,7 +129,7 @@ EXAMPLE_CONFIG = """\
 # mode = "pi"             # "user": your jobs and your usage per project; "pi": also whole projects,
                           # their cards and the predictor (needs `projects` on a cluster). Default: __MODE__
 refresh_seconds = 60      # how often every cluster is polled
-lookback_hours  = 72      # how far back sacct is asked for finished jobs (the first poll takes history_days)
+lookback_hours  = 72      # how far back sacct is asked for finished jobs (older history arrives in chunks)
 history_days    = 30      # finished jobs stay in the local history this long
 ssh_timeout     = 20      # seconds before a hanging ssh is given up on
 persist_connections = true   # keep one ssh connection per cluster open between polls

@@ -738,7 +738,10 @@
     sec.classList.toggle("collapsed", collapsed);
     $("#usage-toggle").textContent = collapsed ? "▸" : "▾";
     $("#usage-toggle").title = collapsed ? "show my usage (u)" : "collapse my usage (u)";
-    $("#usage-status").textContent = `your own jobs per project, from the local history (${state.snapshot.history_days} d kept); CPU and GPU jobs apart`;
+    const cov = Object.entries(state.snapshot.history_coverage || {}).filter(([, c]) => c.pending && c.days != null);
+    $("#usage-status").textContent = cov.length
+      ? `your own jobs per project · older history is being loaded in 7-day chunks, a minute apart: ${cov.map(([n, c]) => `${n} ${Math.round(c.days)} d`).join(", ")} of ${state.snapshot.history_days} d`
+      : `your own jobs per project, from the local history (${state.snapshot.history_days} d kept); CPU and GPU jobs apart`;
     $("#usage-cards").hidden = collapsed;
     $("#usage-compact").hidden = !collapsed;
     if (collapsed) {
