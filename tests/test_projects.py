@@ -532,3 +532,85 @@ class TimeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CompanionAccountTests(unittest.TestCase):
+    """Dardel books GPU time on "<project>-gpu": one project, two Slurm accounts."""
+
+    def test_config_helpers(self):
+        c = ClusterConfig(name="d", host="d", projects=["naiss2025-1-42"])
+        self.assertEqual(c.gpu_account("naiss2025-1-42"), "naiss2025-1-42-gpu")
+        self.assertEqual(c.all_accounts, ["naiss2025-1-42", "naiss2025-1-42-gpu"])
+        self.assertEqual(c.account_map, {"naiss2025-1-42": "naiss2025-1-42", "naiss2025-1-42-gpu": "naiss2025-1-42"})
+        self.assertEqual(c.canonical_account("naiss2025-1-42-gpu"), "naiss2025-1-42")
+        self.assertEqual(c.canonical_account("other"), "other")
+        off = ClusterConfig(name="d", host="d", projects=["p"], project_gpu_suffix="")
+        self.assertIsNone(off.gpu_account("p"))
+        self.assertEqual(off.all_accounts, ["p"])
+        self.assertEqual(off.canonical_account("p-gpu"), "p-gpu")
+        explicit = ClusterConfig(name="d", host="d", projects=["p"], project_gpu_accounts={"p": "gpu-77"})
+        self.assertEqual(explicit.all_accounts, ["p", "gpu-77"])
+        self.assertEqual(explicit.canonical_account("gpu-77"), "p")
+        cfg = config_from_dict({"clusters": [{"name": "a", "host": "a", "project_gpu_suffix": "_gpu", "project_gpu_accounts": {"p": "q"}}]})
+        self.assertEqual(cfg.clusters[0].project_gpu_suffix, "_gpu")
+        with self.assertRaises(ConfigError):
+            config_from_dict({"clusters": [{"name": "a", "host": "a", "project_gpu_suffix": "; rm"}]})
+        with self.assertRaises(ConfigError):
+            config_from_dict({"clusters": [{"name": "a", "host": "a", "project_gpu_accounts": {"p": 3}}]})
+
+    def test_store_folds_companion_into_project(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ProjectStore(Path(tmp) / "p.json", retention_days=90)
+            c = ClusterConfig(name="d", host="d", projects=["proj-a"], gpu_partitions=["gpu"], gpus_per_node={"gpu": 8})
+            sacct = [
+                {"job_id": "1", "account": "proj-a", "user": "alice", "partition": "main", "state": "COMPLETED", "nodes": 1,
+                 "cpus": 128, "cpu_s": 0, "submit": _t(30), "start": _t(29), "end": _t(28), "time_limit_s": 7200, "elapsed_s": 3600, "gpus": 0},
+                {"job_id": "2", "account": "proj-a-gpu", "user": "bob", "partition": "gpu", "state": "COMPLETED", "nodes": 1,
+                 "cpus": 64, "cpu_s": 0, "submit": _t(20), "start": _t(19), "end": _t(17), "time_limit_s": 7200, "elapsed_s": 7200, "gpus": 0},
+                {"job_id": "3", "account": "someone-else", "user": "x", "partition": "gpu", "state": "COMPLETED", "nodes": 1,
+                 "cpus": 64, "cpu_s": 0, "submit": _t(20), "start": _t(19), "end": _t(17), "time_limit_s": 7200, "elapsed_s": 7200, "gpus": 0},
+            ]
+            queue = [{"job_id": "9", "account": "proj-a-gpu", "user": "bob", "state": "RUNNING", "partition": "gpu", "nodes": 2,
+                      "cpus": 128, "gpus": 0, "tasks": 1, "name": "train"}]
+            sshare = [
+                {"account": "proj-a", "user": "", "fairshare": 0.5, "grp_tres_mins": {"cpu": 6000000}, "grp_tres_raw": {"cpu": 600000}},
+                {"account": "proj-a", "user": "alice", "fairshare": 0.4},
+                {"account": "proj-a-gpu", "user": "", "fairshare": 0.7, "grp_tres_mins": {"gres/gpu": 300000}, "grp_tres_raw": {"gres/gpu": 60000}},
+                {"account": "proj-a-gpu", "user": "bob", "fairshare": 0.9},
+            ]
+            store.record_poll("d", c.account_map, NOW, sacct, queue, sshare, [])
+            self.assertEqual(sorted(store.data["jobs"]["d"]), ["proj-a"])  # nothing stored under the companion name
+            self.assertEqual(sorted(store.data["jobs"]["d"]["proj-a"]), ["1", "2"])
+            s = store.summary("d", "proj-a", NOW, gpu_partitions=c.gpu_partitions, gpus_per_node=c.gpus_per_node,
+                              accounts=c.accounts_of("proj-a"))
+            self.assertEqual(s["accounts"], ["proj-a", "proj-a-gpu"])
+            self.assertEqual(s["gpu_account"], "proj-a-gpu")
+            self.assertEqual(s["usage"]["30"]["cpu"]["jobs"], 1)
+            self.assertEqual(s["usage"]["30"]["gpu"]["jobs"], 1)
+            self.assertAlmostEqual(s["usage"]["30"]["gpu"]["gpu_h"], 2 * 8, delta=0.01)  # 2 h x 1 node x 8 GPUs
+            self.assertEqual(s["running"]["gpu"]["jobs"], 1)
+            self.assertEqual(s["running"]["gpu"]["gpus"], 16)
+            self.assertEqual(s["quota"]["limit_h"], 100000)  # the project's own cpu limit
+            self.assertEqual(s["gpu_quota"]["limit_h"], 5000)  # the companion's gres/gpu limit
+            self.assertEqual(s["gpu_quota"]["used_h"], 1000)
+            self.assertEqual(s["shares"]["users"]["alice"]["fairshare"], 0.4)
+            # the quick queue refresh and the back-fill fold the same way
+            store.record_queue("d", c.account_map, NOW + 60, [])
+            self.assertEqual(store.queue("d", "proj-a")["rows"], [])
+            store.record_backfill("d", c.account_map, NOW - 40 * 86400, [
+                {"job_id": "0", "account": "proj-a-gpu", "user": "bob", "partition": "gpu", "state": "COMPLETED", "nodes": 1,
+                 "cpus": 64, "cpu_s": 0, "submit": _t(900), "start": _t(899), "end": _t(898), "time_limit_s": 7200, "elapsed_s": 3600, "gpus": 0}], NOW)
+            self.assertIn("0", store.data["jobs"]["d"]["proj-a"])
+
+    def test_companion_cpu_limit_becomes_gpu_quota(self):
+        # a site that accounts the GPU allocation in core-minutes: the companion's cpu limit is still the GPU quota
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ProjectStore(Path(tmp) / "p.json", retention_days=90)
+            c = ClusterConfig(name="d", host="d", projects=["p"])
+            store.record_poll("d", c.account_map, NOW, [], [], [
+                {"account": "p", "user": "", "grp_tres_mins": {"cpu": 60}, "grp_tres_raw": {"cpu": 6}},
+                {"account": "p-gpu", "user": "", "grp_tres_mins": {"cpu": 6000}, "grp_tres_raw": {"cpu": 600}}], [])
+            s = store.summary("d", "p", NOW, accounts=c.accounts_of("p"))
+            self.assertEqual(s["gpu_quota"]["limit_h"], 100)
+            self.assertEqual(s["gpu_quota"]["window"], "allocation (core-h)")
+            self.assertEqual(s["quota"]["limit_h"], 1)

@@ -52,10 +52,48 @@ class ClusterConfig:
     gpu_hour_factor: float = 1.0  # GPU-hours billed per Slurm GPU unit and hour (LUMI-G: 0.5, two units per MI250X)
     project_refresh_seconds: int | None = None  # how often the projects are polled here; None = global default
     nice: int = 0  # the --nice you usually submit with on this cluster (lowers priority; used by the predictor)
+    # GPU time booked on a companion account (Dardel: "<project>-gpu") is folded into the project
+    project_gpu_suffix: str = "-gpu"  # companion account = project + suffix; "" turns this off
+    project_gpu_accounts: dict[str, str] = field(default_factory=dict)  # project -> companion account, when it is not project + suffix
 
     @property
     def is_local(self) -> bool:
         return self.host in (None, "", "local", "localhost")
+
+    def gpu_account(self, project: str) -> str | None:
+        """The companion account whose jobs belong to `project` (None when there is none)."""
+        explicit = self.project_gpu_accounts.get(project)
+        if explicit:
+            return explicit if explicit != project else None
+        return project + self.project_gpu_suffix if self.project_gpu_suffix else None
+
+    def accounts_of(self, project: str) -> list[str]:
+        gpu = self.gpu_account(project)
+        return [project, gpu] if gpu else [project]
+
+    @property
+    def account_map(self) -> dict[str, str]:
+        """Slurm account -> the project it is shown under, for every watched project."""
+        out: dict[str, str] = {}
+        for proj in self.projects:
+            for acc in self.accounts_of(proj):
+                out.setdefault(acc, proj)
+        return out
+
+    @property
+    def all_accounts(self) -> list[str]:
+        """Every account the project poll asks Slurm about (projects plus companions)."""
+        return list(self.account_map)
+
+    def canonical_account(self, account: str) -> str:
+        """The project an account of yours belongs to: a companion account folds into its
+        project (by the explicit table, or by stripping the suffix), anything else is itself."""
+        for proj, gpu in self.project_gpu_accounts.items():
+            if gpu == account:
+                return proj
+        if self.project_gpu_suffix and account.endswith(self.project_gpu_suffix) and len(account) > len(self.project_gpu_suffix):
+            return account[: -len(self.project_gpu_suffix)]
+        return account
 
 
 @dataclass
@@ -163,7 +201,9 @@ host = "tetralith"               # ssh alias
 # color = "#5f9e99"
 # logo = "~/Pictures/nsc.png"    # or drop <name>.png/.svg into ~/.config/omniqueue/logos/
 # projects = ["naiss2025-1-23"]  # Slurm accounts to watch: who runs how much, fairshare, quota (all users)
-#                                # GPU time may be a separate account (Dardel: "naiss2025-1-23-gpu"): list it too
+#                                # a companion GPU account (Dardel: "naiss2025-1-23-gpu") is folded into the project
+# project_gpu_suffix = "-gpu"    # how the companion account is named (default "-gpu"; "" = none)
+# project_gpu_accounts = { "naiss2025-1-23" = "gpu-2025-42" }  # when it is not project + suffix
 # project_quotas = { "naiss2025-1-23" = 100000 }   # core-hours per 30 days, when the site does not publish it via sshare
 # project_gpu_quotas = { "naiss2025-1-23" = 2000 } # GPU-hours per 30 days (GPU jobs are counted separately from CPU jobs)
 # project_pis = { "naiss2025-1-23" = "A. Nilsson" } # PI (or any label) shown next to the project name
@@ -301,6 +341,12 @@ def config_from_dict(raw: dict) -> Config:
         pis = c.get("project_pis", {})
         if not isinstance(pis, dict) or not all(isinstance(v, str) for v in pis.values()):
             raise ConfigError(f"clusters[{i}] ({c['name']}).project_pis must be a table of project = \"name\".")
+        suffix = c.get("project_gpu_suffix", "-gpu")
+        if not isinstance(suffix, str) or (suffix and not _SAFE_VALUE.match(suffix)):
+            raise ConfigError(f"clusters[{i}] ({c['name']}).project_gpu_suffix must be a short account suffix such as \"-gpu\" (or \"\").")
+        gacc = c.get("project_gpu_accounts", {})
+        if not isinstance(gacc, dict) or not all(isinstance(v, str) and _SAFE_VALUE.match(v) for v in gacc.values()):
+            raise ConfigError(f"clusters[{i}] ({c['name']}).project_gpu_accounts must be a table of project = \"account\".")
         factor = c.get("gpu_hour_factor", 1.0)
         if not isinstance(factor, (int, float)) or factor <= 0:
             raise ConfigError(f"clusters[{i}] ({c['name']}).gpu_hour_factor must be a positive number.")

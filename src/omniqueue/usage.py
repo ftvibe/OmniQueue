@@ -73,8 +73,11 @@ def own_usage(config: Config, jobs_by_cluster: dict[str, list[Job]], now: float 
             return (j.nodes or 1) * gpn.get(j.partition, 0) if j.partition in gpu_parts else 0
 
         by_account: dict[str, list[Job]] = {}
+        raw_accounts: dict[str, set[str]] = {}
         for j in jobs:
-            by_account.setdefault(j.account or "?", []).append(j)
+            account = cfg.canonical_account(j.account) if j.account else "?"  # "<project>-gpu" folds into the project
+            by_account.setdefault(account, []).append(j)
+            raw_accounts.setdefault(account, set()).add(j.account or "?")
         for account, ajobs in by_account.items():
             ivs = [(j, iv) for j in ajobs if (iv := _interval(j, now))]
 
@@ -128,6 +131,7 @@ def own_usage(config: Config, jobs_by_cluster: dict[str, list[Job]], now: float 
             starts = [s0 for _, (s0, _) in ivs]
             out.append({
                 "cluster": cname, "account": account, "pi": cfg.project_pis.get(account),
+                "accounts": sorted(raw_accounts[account], key=lambda a: (a != account, a)),
                 "usage": usage, "daily": daily, "running": running, "pending": pending,
                 "has_gpu": has_gpu, "gpu_factor": factor, "gpu_partitions": sorted(gpu_parts),
                 "gpus_per_node": {p: n for p, n in gpn.items() if n > 0},

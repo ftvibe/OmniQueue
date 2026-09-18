@@ -235,12 +235,15 @@ def _demo_project_rows(cluster: str, project: str, rng: random.Random, now: floa
             state, end = "RUNNING", None
         ts = lambda t: time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(t))  # noqa: E731
         job_part, job_cpn, gpus = part, cpn, 0
+        account = project
         if cluster in gpu_parts and rng.random() < 0.3:  # some GPU jobs on the GPU partition
             job_part, job_cpn, gpn = gpu_parts[cluster]
             nodes = min(nodes, 2)
             gpus = nodes * gpn
+            if cluster == "dardel":  # PDC books GPU time on a companion account, and its sacct shows no gres
+                account, gpus = project + "-gpu", 0
         sacct.append({
-            "job_id": str(base + i), "account": project, "user": user, "partition": job_part, "state": state, "gpus": gpus,
+            "job_id": str(base + i), "account": account, "user": user, "partition": job_part, "state": state, "gpus": gpus,
             "nodes": nodes, "cpus": nodes * job_cpn, "elapsed_s": int((now if end is None else end) - start), "cpu_s": 0,
             "submit": ts(start - rng.uniform(60, 6 * 3600)), "start": ts(start), "end": ts(end) if end else "",
             "time_limit_s": int(hours * 3600),
@@ -250,7 +253,7 @@ def _demo_project_rows(cluster: str, project: str, rng: random.Random, now: floa
         return sacct, queue
     for r in sacct:
         if r["state"] == "RUNNING":
-            queue.append({"job_id": r["job_id"], "account": project, "user": r["user"], "state": "RUNNING", "partition": r["partition"],
+            queue.append({"job_id": r["job_id"], "account": r["account"], "user": r["user"], "state": "RUNNING", "partition": r["partition"],
                           "nodes": r["nodes"], "cpus": r["cpus"], "time_limit_s": r["time_limit_s"], "elapsed_s": r["elapsed_s"],
                           "tasks": 1, "gpus": r["gpus"], "name": f"{rng.choice(_NAMES)}-{rng.randint(1, 40):02d}"})
     for i in range(rng.randint(2, 9)):
@@ -262,18 +265,22 @@ def _demo_project_rows(cluster: str, project: str, rng: random.Random, now: floa
                       "elapsed_s": 0, "tasks": tasks, "gpus": 0, "name": f"{rng.choice(_NAMES)}-{rng.randint(1, 40):02d}"})
     if cluster in gpu_parts:
         gpart, gcpn, gpn = gpu_parts[cluster]
-        queue.append({"job_id": str(base + n_jobs + 50), "account": project, "user": rng.choice(_DEMO_USERS[:4]), "state": "PENDING",
-                      "partition": gpart, "nodes": 1, "cpus": gcpn, "time_limit_s": 8 * 3600, "elapsed_s": 0, "tasks": 1, "gpus": gpn,
-                      "name": "train-gpu"})
+        dardel = cluster == "dardel"  # companion account, and no gres in the queue either
+        queue.append({"job_id": str(base + n_jobs + 50), "account": project + "-gpu" if dardel else project, "user": rng.choice(_DEMO_USERS[:4]),
+                      "state": "PENDING", "partition": gpart, "nodes": 1, "cpus": gcpn, "time_limit_s": 8 * 3600, "elapsed_s": 0, "tasks": 1,
+                      "gpus": 0 if dardel else gpn, "name": "train-gpu"})
     return sacct, queue
 
 
 def _demo_sshare(project: str, rng: random.Random) -> list[dict]:
+    gpu = project.endswith("-gpu")  # Dardel's companion account: its limit is the GPU quota
+    mins = {"gres/gpu": 3000 * 60} if gpu else {"cpu": 100000 * 60} if project.startswith("naiss2025-3") else {}
+    raw = {"gres/gpu": rng.randint(500, 2500) * 60} if gpu else {"cpu": rng.randint(20000, 80000) * 60} if project.startswith("naiss2025-3") else {}
     rows = [{"account": project, "user": "", "raw_shares": 1, "norm_shares": 0.01, "raw_usage": rng.randint(2_000_000, 9_000_000),
              "effective_usage": rng.uniform(0.005, 0.02), "fairshare": rng.uniform(0.2, 0.9),
-             "grp_tres_mins": {"cpu": 100000 * 60, "gres/gpu": 3000 * 60} if project.startswith("naiss2025-3") else {},
-             "grp_tres_raw": {"cpu": rng.randint(20000, 80000) * 60, "gres/gpu": rng.randint(500, 2500) * 60} if project.startswith("naiss2025-3") else {},
-             "tres_run_mins": {}}]
+             "grp_tres_mins": mins, "grp_tres_raw": raw, "tres_run_mins": {}}]
+    if gpu:
+        return rows
     for u in _DEMO_USERS:
         rows.append({"account": project, "user": u, "raw_shares": 1, "norm_shares": 0.002, "raw_usage": rng.randint(10000, 3_000_000),
                      "effective_usage": rng.uniform(0.0005, 0.005), "fairshare": rng.uniform(0.1, 0.95),
@@ -328,6 +335,8 @@ class DemoProjectPoller(ProjectPoller):
             sacct_all += sacct
             queue_all += queue
             sshare_all += _demo_sshare(proj, self._rng)
+            if cluster.name == "dardel" and cluster.gpu_account(proj):
+                sshare_all += _demo_sshare(cluster.gpu_account(proj), self._rng)
         parts = make_demo_load(cluster.name, self._rng)
         if cluster.load_partitions:
             parts = [p for p in parts if p["partition"] in cluster.load_partitions]

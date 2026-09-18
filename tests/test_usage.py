@@ -97,3 +97,16 @@ class OwnUsageTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CompanionAccountUsageTests(unittest.TestCase):
+    def test_gpu_companion_folds_into_project(self):
+        jobs = JOBS + [Job("c", "4", "me", "COMPLETED", account="proj-gpu", partition="gpu", nodes=1, cpus=16, gpus=4,
+                           start_time=_t(6), end_time=_t(5))]
+        recs = own_usage(_cfg(), {"c": jobs}, now=NOW)
+        self.assertEqual(sorted(r["account"] for r in recs), ["other-proj", "proj"])
+        proj = next(r for r in recs if r["account"] == "proj")
+        self.assertEqual(proj["accounts"], ["proj", "proj-gpu"])
+        self.assertEqual(proj["usage"]["30"]["gpu"]["jobs"], 2)
+        off = own_usage(_cfg(project_gpu_suffix=""), {"c": jobs}, now=NOW)
+        self.assertEqual(sorted(r["account"] for r in off), ["other-proj", "proj", "proj-gpu"])

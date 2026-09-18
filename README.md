@@ -73,7 +73,9 @@ host = "tetralith"          # anything ssh accepts, aliases from ~/.ssh/config i
 # color = "#5f9e99"         # accent colour in the dashboard
 # logo = "~/Pictures/nsc.png" # or drop <name>.svg/.png into ~/.config/omniqueue/logos/
 # projects = ["naiss2025-1-23"]                    # watch these Slurm accounts: who runs how much (all users)
-#                                                  # GPU time is often a separate account (Dardel: "naiss2025-1-23-gpu"): list it too
+#                                                  # a companion GPU account (Dardel: "naiss2025-1-23-gpu") is folded into the project
+# project_gpu_suffix = "-gpu"                       # how that companion is named (default "-gpu"; "" = none)
+# project_gpu_accounts = { "naiss2025-1-23" = "gpu-2025-42" }  # when it is not project + suffix
 # project_quotas = { "naiss2025-1-23" = 100000 }  # core-hours per 30 days, if sshare does not publish a limit
 # project_gpu_quotas = { "naiss2025-1-23" = 2000 } # GPU-hours per 30 days; GPU jobs are kept apart from CPU jobs
 # project_pis = { "naiss2025-1-23" = "A. Nilsson" }   # PI (or any label) shown next to the project name
@@ -262,9 +264,14 @@ cluster names from your config, `list --state` the job states.
   partition that never asked for a gres, as on Dardel, counts as nodes x GPUs
   per node. The same remembered gres also sizes the project cards, so a project
   poll that ran before GPUs were tracked cannot leave them at 0 GPU-hours.
-  A project card can only show GPU-hours booked on the accounts it lists: at PDC
-  (Dardel) GPU time is a separate allocation with its own account name, usually
-  the compute project plus `-gpu`, so add that account to `projects` as well.
+  At PDC (Dardel) GPU time is a separate allocation with its own Slurm account,
+  the compute project plus `-gpu`. OmniQueue folds such a companion account into
+  its project automatically: the poll asks Slurm for both accounts, everything is
+  stored and shown under the project name (the card notes `+ <project>-gpu` once
+  Slurm has returned a row for it), and the companion's `sshare` limit becomes the
+  project's GPU quota. The same folding applies to your own usage row. The suffix
+  is `project_gpu_suffix` (default `-gpu`, `""` turns it off) and an odd name goes
+  in `project_gpu_accounts = { project = "account" }`.
   Where `sinfo` reports no gres at all, `gpus_per_node = { gpu = 4 }`
   states the node size (it also marks the partition as a GPU one).
   `gpu_hour_factor` converts Slurm GPU units into billed GPU-hours (LUMI-G:

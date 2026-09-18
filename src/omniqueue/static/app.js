@@ -704,7 +704,7 @@
     const card = el("article", { class: "card pcard ucard", style: `--card-color:${color}` });
     card.append(el("div", { class: "pcard-head" }, el("div", { class: "pcard-row" },
       el("span", { class: "w-cpill", style: `background:${color};color:#fff` }, u.cluster),
-      el("b", {}, u.account), u.pi ? el("span", { class: "ppi", title: `PI: ${u.pi} (project_pis in the config)` }, u.pi) : null),
+      el("b", {}, u.account), u.pi ? el("span", { class: "ppi", title: `PI: ${u.pi} (project_pis in the config)` }, u.pi) : null, accountTag(u, u.account)),
       el("small", { class: "muted", title: "your own jobs in this project, from the local job history" },
         `${plural(u.jobs_known, "job")} of yours known` + (u.oldest ? ` · since ${fmtTime(new Date(u.oldest * 1000).toISOString().slice(0, 19))}` : ""))));
     const rc = u.running.cpu, rg = u.running.gpu, qc = u.pending.cpu, qg = u.pending.gpu, u30 = u.usage["30"], u7 = u.usage["7"];
@@ -824,6 +824,13 @@
       el("span", { class: "pval", title }, valueText), stackBar(parts, total, barTitle));
   }
 
+  // a companion account folded into a project (Dardel books GPU time on "<project>-gpu")
+  function accountTag(p, name) {
+    const extra = (p.accounts || []).filter((a) => a !== name);
+    if (!extra.length) return null;
+    return el("span", { class: "pacc", title: `also counts the account${extra.length > 1 ? "s" : ""} ${extra.join(", ")} (GPU time booked there belongs to this project)` }, `+ ${extra.join(", ")}`);
+  }
+
   function projectCard(p) {
     const color = p.color || clusterColor(p.cluster);
     const card = el("article", { class: "card pcard", style: `--card-color:${color}`, title: "click for the project's running and waiting jobs",
@@ -840,6 +847,7 @@
         el("span", { class: "w-cpill", style: `background:${color};color:#fff` }, p.cluster),
         el("b", {}, p.project),
         p.pi ? el("span", { class: "ppi", title: `PI: ${p.pi} (project_pis in the config)` }, p.pi) : null,
+        accountTag(p, p.project),
         el("button", { class: `qrefresh ${p.queue_fetching ? "spin" : ""}`, title: "re-read this cluster's project queue now (squeue only, no accounting)",
           onclick: (e) => { e.stopPropagation(); refreshQueue(p.cluster); } }, "↻")),
       el("small", { class: "muted", title: `queue as of ${p.updated ? clock(p.updated) : "–"}; the full poll (accounting, fairshare, load) runs every ${fmtEvery(p.refresh_seconds)} in the background, next ${p.next_poll ? clock(p.next_poll).slice(0, 5) : "–"}` },
@@ -916,9 +924,9 @@
     if (!p) { title.textContent = "project not found"; $("#project-jobs tbody").replaceChildren(); return; }
     const color = p.color || clusterColor(p.cluster);
     const rc = p.running.cpu, rg = p.running.gpu, qc = p.pending.cpu, qg = p.pending.gpu;
-    title.replaceChildren(el("span", { class: "w-cpill", style: `background:${color};color:#fff` }, p.cluster), el("b", {}, p.project), p.pi ? el("span", { class: "ppi" }, p.pi) : null,
+    title.replaceChildren(...[el("span", { class: "w-cpill", style: `background:${color};color:#fff` }, p.cluster), el("b", {}, p.project), p.pi ? el("span", { class: "ppi" }, p.pi) : null, accountTag(p, p.project),
       el("span", { class: "muted" }, ` · ${plural(rc.jobs + rg.jobs, "job")} running, ${fmtInt(qc.jobs + qg.jobs)} waiting`
-        + (p.has_gpu ? ` · ${fmtInt(Math.round(rc.cores))} cores and ${fmtInt(Math.round(rg.gpus))} GPUs in use` + (p.gpu_factor !== 1 ? ` (Slurm units; billed x ${p.gpu_factor})` : "") : ` · ${fmtInt(Math.round(rc.cores))} cores in use`)));
+        + (p.has_gpu ? ` · ${fmtInt(Math.round(rc.cores))} cores and ${fmtInt(Math.round(rg.gpus))} GPUs in use` + (p.gpu_factor !== 1 ? ` (Slurm units; billed x ${p.gpu_factor})` : "") : ` · ${fmtInt(Math.round(rc.cores))} cores in use`))].filter(Boolean));
     $("#project-note").textContent = p.queue_error ? `queue refresh failed: ${p.queue_error}`
       : p.queue_fetching ? "re-reading the queue…"
       : p.updated ? `every user's jobs in this project as of ${clock(p.updated).slice(0, 5)} (the full poll runs every ${fmtEvery(p.refresh_seconds)}; ↻ refresh queue re-reads only squeue); pending arrays count as one row`

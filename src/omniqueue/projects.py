@@ -125,14 +125,38 @@ class ProjectStore:
         """Earliest time the accounting has been fetched back to (None before the first poll)."""
         return self.data["meta"].setdefault("oldest", {}).get(cluster)
 
-    def record_backfill(self, cluster: str, projects: list[str], start_ts: float, sacct_rows: list[dict], now: float) -> None:
+    @staticmethod
+    def _accounts(projects) -> dict[str, str]:
+        """`projects` is a list of project names or a table account -> project (a companion
+        GPU account folds into its project); either way: account -> project."""
+        return dict(projects) if isinstance(projects, dict) else {p: p for p in projects}
+
+    def _note_companions(self, cluster: str, accounts: dict[str, str], *row_lists: list[dict]) -> None:
+        """Remember which companion accounts Slurm actually knows (a row came back for them),
+        so the card names only accounts that exist.  Call with the lock held."""
+        seen = self.data["meta"].setdefault("companions", {}).setdefault(cluster, {})
+        for rows in row_lists:
+            for row in rows:
+                acc = row.get("account") or ""
+                proj = accounts.get(acc)
+                if proj is not None and acc != proj:
+                    seen[proj] = acc
+
+    def companion(self, cluster: str, project: str) -> str | None:
+        """The companion GPU account seen for a project, if Slurm ever returned a row for it."""
+        with self._lock:
+            return self.data["meta"].get("companions", {}).get(cluster, {}).get(project)
+
+    def record_backfill(self, cluster: str, projects, start_ts: float, sacct_rows: list[dict], now: float) -> None:
         """Merge an older chunk of accounting and move the coverage marker back to `start_ts`."""
+        accounts = self._accounts(projects)
         with self._lock:
             self._learn_gpu_partitions(cluster, sacct_rows)
+            self._note_companions(cluster, accounts, sacct_rows)
             jobs = self.data["jobs"].setdefault(cluster, {})
             for row in sacct_rows:
-                proj = row.get("account") or ""
-                if proj not in projects:
+                proj = accounts.get(row.get("account") or "")
+                if proj is None:
                     continue
                 rec = {k: row.get(k) for k in ("user", "partition", "state", "nodes", "cpus", "cpu_s", "submit",
                                               "start", "end", "time_limit_s", "elapsed_s", "gpus")}
@@ -152,15 +176,18 @@ class ProjectStore:
             if (row.get("gpus") or 0) > 0 and part and part not in learned:
                 learned.append(part)
 
-    def record_poll(self, cluster: str, projects: list[str], now: float, sacct_rows: list[dict],
+    def record_poll(self, cluster: str, projects, now: float, sacct_rows: list[dict],
                     queue_rows: list[dict], sshare_rows: list[dict], load_parts: list[dict],
                     window_start: float | None = None) -> None:
+        accounts = self._accounts(projects)
+        projects = list(dict.fromkeys(accounts.values()))
         with self._lock:
             self._learn_gpu_partitions(cluster, sacct_rows + queue_rows)
+            self._note_companions(cluster, accounts, sacct_rows, queue_rows, sshare_rows)
             jobs = self.data["jobs"].setdefault(cluster, {})
             for row in sacct_rows:
-                proj = row.get("account") or ""
-                if proj not in projects:
+                proj = accounts.get(row.get("account") or "")
+                if proj is None:
                     continue
                 rec = {k: row.get(k) for k in ("user", "partition", "state", "nodes", "cpus", "cpu_s", "submit",
                                               "start", "end", "time_limit_s", "elapsed_s", "gpus")}
@@ -168,20 +195,24 @@ class ProjectStore:
                 jobs.setdefault(proj, {})[row["job_id"]] = rec
             queue = self.data["queue"].setdefault(cluster, {})
             for proj in projects:
-                queue[proj] = {"ts": now, "rows": [r for r in queue_rows if r.get("account") == proj]}
+                queue[proj] = {"ts": now, "rows": [r for r in queue_rows if accounts.get(r.get("account") or "") == proj]}
             shares = self.data["shares"].setdefault(cluster, {})
+            acct_keys = ("raw_shares", "norm_shares", "raw_usage", "effective_usage", "fairshare", "grp_tres_mins", "grp_tres_raw")
             for proj in projects:
                 mine = [r for r in sshare_rows if r.get("account") == proj]
-                if not mine:
+                companions = [r for r in sshare_rows if r.get("account") != proj and accounts.get(r.get("account") or "") == proj]
+                if not mine and not companions:
                     continue
                 account = next((r for r in mine if not r.get("user")), None)
+                gpu_account = next((r for r in companions if not r.get("user")), None)
                 sample = {
                     "ts": now,
-                    "account": {k: account.get(k) for k in ("raw_shares", "norm_shares", "raw_usage", "effective_usage",
-                                                             "fairshare", "grp_tres_mins", "grp_tres_raw")} if account else None,
+                    "account": {k: account.get(k) for k in acct_keys} if account else None,
                     "users": {r["user"]: {k: r.get(k) for k in ("raw_shares", "norm_shares", "raw_usage", "effective_usage", "fairshare")}
                               for r in mine if r.get("user")},
                 }
+                if gpu_account:  # the companion GPU account's limits, for the GPU quota
+                    sample["gpu_account"] = {"name": gpu_account.get("account"), **{k: gpu_account.get(k) for k in acct_keys}}
                 shares.setdefault(proj, []).append(sample)
             self._add_load_samples(cluster, now, load_parts)
             self.data["meta"]["last_poll"][cluster] = now
@@ -190,13 +221,15 @@ class ProjectStore:
                 oldest[cluster] = min(oldest.get(cluster, window_start), window_start)
             self._prune(now)
 
-    def record_queue(self, cluster: str, projects: list[str], now: float, queue_rows: list[dict]) -> None:
+    def record_queue(self, cluster: str, projects, now: float, queue_rows: list[dict]) -> None:
         """Replace the stored queue of a cluster's projects (the quick refresh)."""
+        accounts = self._accounts(projects)
         with self._lock:
             self._learn_gpu_partitions(cluster, queue_rows)
+            self._note_companions(cluster, accounts, queue_rows)
             queue = self.data["queue"].setdefault(cluster, {})
-            for proj in projects:
-                queue[proj] = {"ts": now, "rows": [r for r in queue_rows if r.get("account") == proj]}
+            for proj in dict.fromkeys(accounts.values()):
+                queue[proj] = {"ts": now, "rows": [r for r in queue_rows if accounts.get(r.get("account") or "") == proj]}
 
     def _add_load_samples(self, cluster: str, now: float, load_parts: list[dict]) -> None:
         load = self.data["load"].setdefault(cluster, {})
@@ -302,8 +335,12 @@ class ProjectStore:
     def summary(self, cluster: str, project: str, now: float, me: str | None = None,
                 quota_core_h: float | None = None, quota_gpu_h: float | None = None,
                 gpu_partitions: list[str] | None = None, gpu_factor: float = 1.0,
-                gpus_per_node: dict[str, int] | None = None) -> dict[str, Any]:
+                gpus_per_node: dict[str, int] | None = None, accounts: list[str] | None = None) -> dict[str, Any]:
         """Everything the project card shows, computed from the store.
+
+        ``accounts`` lists the Slurm accounts folded into this project (the project itself and
+        a companion GPU account such as Dardel's ``<project>-gpu``); the card names a companion
+        only once Slurm has returned a row for it, so clusters without one show nothing extra.
 
         ``gpu_factor`` converts Slurm GPU units into billed GPUs: LUMI-G exposes each
         MI250X as two units and bills half a GPU-hour per unit-hour (0.5).
@@ -466,8 +503,18 @@ class ProjectStore:
         grp_mins, grp_raw = acc.get("grp_tres_mins") or {}, acc.get("grp_tres_raw") or {}
         quota = make_quota(quota_core_h, usage["30"]["cpu"]["core_h"], "config", "30 d") if quota_core_h else \
             make_quota((grp_mins.get("cpu") or 0) / 60, (grp_raw.get("cpu") or 0) / 60, "sshare", "allocation")
-        gpu_quota = make_quota(quota_gpu_h, usage["30"]["gpu"]["gpu_h"], "config", "30 d") if quota_gpu_h else \
-            make_quota((grp_mins.get("gres/gpu") or 0) / 60, (grp_raw.get("gres/gpu") or 0) / 60, "sshare", "allocation")
+        # the GPU quota: from sshare of the companion GPU account when there is one (its gres/gpu
+        # limit, or its cpu limit where the site accounts GPU time in core-minutes), else the project's
+        gacc = (latest or {}).get("gpu_account") or {}
+        g_mins, g_raw = gacc.get("grp_tres_mins") or {}, gacc.get("grp_tres_raw") or {}
+        if quota_gpu_h:
+            gpu_quota = make_quota(quota_gpu_h, usage["30"]["gpu"]["gpu_h"], "config", "30 d")
+        elif g_mins.get("gres/gpu"):
+            gpu_quota = make_quota(g_mins["gres/gpu"] / 60, (g_raw.get("gres/gpu") or 0) / 60, "sshare", "allocation")
+        elif g_mins.get("cpu"):
+            gpu_quota = make_quota(g_mins["cpu"] / 60, (g_raw.get("cpu") or 0) / 60, "sshare", "allocation (core-h)")
+        else:
+            gpu_quota = make_quota((grp_mins.get("gres/gpu") or 0) / 60, (grp_raw.get("gres/gpu") or 0) / 60, "sshare", "allocation")
 
         # per-partition breakdown (30 d): what the jobs carry and how each partition is classified
         by_partition: dict[str, dict] = {}
@@ -496,12 +543,16 @@ class ProjectStore:
                 weight.setdefault(u, 0)
         users = sorted(weight, key=lambda u: -weight[u])
         has_gpu = bool(gpu_parts) or u30["gpu"]["jobs"] > 0 or running["gpu"]["jobs"] > 0 or pending["gpu"]["jobs"] > 0
+        companion = gacc.get("name") or self.companion(cluster, project)
+        if accounts is not None and companion not in accounts:  # the config no longer folds that account in
+            companion = None
         starts = [slurm_ts(r.get("start")) for r in jobs.values()]
         oldest = min([s0 for s0 in starts if s0], default=None)
         return {
             "cluster": cluster, "project": project, "updated": (q or {}).get("ts") or self.last_poll(cluster),
             "running": running, "pending": pending, "usage": usage, "daily": daily, "shares": shares,
             "quota": quota, "gpu_quota": gpu_quota, "has_gpu": has_gpu, "gpu_partitions": sorted(gpu_parts),
+            "accounts": [project] + ([companion] if companion else []), "gpu_account": companion,
             "gpu_factor": gpu_factor, "by_partition": by_partition,
             "users": users, "me": me, "jobs_known": len(jobs), "oldest": oldest,
             "jobs_now": sorted(jobs_now, key=lambda r: (r["category"] != "running", -(r.get("elapsed_s") or 0), r["job_id"])),
@@ -587,7 +638,7 @@ class ProjectPoller:
     def fetch(self, cluster: ClusterConfig, start_ts: float) -> tuple[list[dict], list[dict], list[dict], list[dict], list[str]]:
         """Run the combined command with an sacct window from `start_ts` to now.
         Returns (queue rows, sacct rows, sshare rows, load partitions, warnings)."""
-        res = self._run(cluster, project_command(list(cluster.projects), start_ts, None))  # all partitions: GPU detection needs them
+        res = self._run(cluster, project_command(cluster.all_accounts, start_ts, None))  # all partitions: GPU detection needs them
         section, warnings = self._sections(res)
         queue_rows = self._queue_rows(section)
         sacct_rows = parse_project_sacct(section("sacct_proj"))
@@ -613,7 +664,7 @@ class ProjectPoller:
 
     def fetch_queue(self, cluster: ClusterConfig) -> list[dict]:
         """Only the projects' running and waiting jobs (no accounting, sshare or load)."""
-        res = self._run(cluster, project_queue_command(list(cluster.projects)))
+        res = self._run(cluster, project_queue_command(cluster.all_accounts))
         section, _ = self._sections(res)
         return self._queue_rows(section)
 
@@ -633,7 +684,7 @@ class ProjectPoller:
                     self.status[cluster.name].update(queue_error=str(exc), queue_fetching=False)
                     self.version += 1
                 return
-            self.store.record_queue(cluster.name, list(cluster.projects), time.time(), rows)
+            self.store.record_queue(cluster.name, cluster.account_map, time.time(), rows)
             if not cluster.is_local and self.config.persist_connections:
                 touch_last_use(cluster, self.config)
             with self._lock:
@@ -661,7 +712,7 @@ class ProjectPoller:
 
     def fetch_backfill(self, cluster: ClusterConfig, start_ts: float, end_ts: float) -> list[dict]:
         """One older chunk of accounting only (no queue, sshare or load)."""
-        res = self._run(cluster, project_backfill_command(list(cluster.projects), start_ts, end_ts))
+        res = self._run(cluster, project_backfill_command(cluster.all_accounts, start_ts, end_ts))
         section, _ = self._sections(res)
         return parse_project_sacct(section("sacct_proj", required=True))
 
@@ -712,7 +763,7 @@ class ProjectPoller:
             except RemoteError as exc:
                 self._fail(cluster, exc, t0, retry_in=min(interval, 900))
                 return
-            self.store.record_backfill(cluster.name, list(cluster.projects), start_ts, rows, now)
+            self.store.record_backfill(cluster.name, cluster.account_map, start_ts, rows, now)
         else:
             start_ts = self.window_start(cluster, now)
             try:
@@ -720,7 +771,7 @@ class ProjectPoller:
             except RemoteError as exc:
                 self._fail(cluster, exc, t0, retry_in=min(interval, 900))
                 return
-            self.store.record_poll(cluster.name, list(cluster.projects), now, sacct_rows, queue_rows, sshare_rows,
+            self.store.record_poll(cluster.name, cluster.account_map, now, sacct_rows, queue_rows, sshare_rows,
                                    load_parts, window_start=start_ts)
         if not cluster.is_local and self.config.persist_connections:
             touch_last_use(cluster, self.config)
@@ -834,7 +885,7 @@ class ProjectPoller:
             for proj in c.projects:
                 s = self.store.summary(c.name, proj, now, me=self.me(c), quota_core_h=c.project_quotas.get(proj),
                                        quota_gpu_h=c.project_gpu_quotas.get(proj), gpu_partitions=c.gpu_partitions,
-                                       gpu_factor=c.gpu_hour_factor, gpus_per_node=self.gpus_per_node(c))
+                                       gpu_factor=c.gpu_hour_factor, gpus_per_node=self.gpus_per_node(c), accounts=c.accounts_of(proj))
                 s["color"] = st["color"]
                 s["pi"] = c.project_pis.get(proj)
                 s["error"] = st["error"]
@@ -880,7 +931,7 @@ class ProjectPoller:
             for proj in c.projects:
                 summ = self.store.summary(c.name, proj, now, me=me, quota_core_h=c.project_quotas.get(proj),
                                           quota_gpu_h=c.project_gpu_quotas.get(proj), gpu_partitions=c.gpu_partitions,
-                                          gpu_factor=c.gpu_hour_factor, gpus_per_node=self.gpus_per_node(c))
+                                          gpu_factor=c.gpu_hour_factor, gpus_per_node=self.gpus_per_node(c), accounts=c.accounts_of(proj))
                 sh = summ.get("shares") or {}
                 projs[proj] = {
                     "fairshare_me": (sh.get("users", {}).get(me) or {}).get("fairshare"),
