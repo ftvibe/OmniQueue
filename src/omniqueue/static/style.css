@@ -125,11 +125,13 @@ kbd { font: 11px var(--mono); background: var(--surface-2); border: 1px solid va
 .proj-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 12px; align-items: stretch; }
 .pcard { cursor: pointer; min-height: 0; gap: 8px; }
 .pcard:hover { border-color: var(--accent); border-left-color: var(--card-color); }
-.pcard-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pcard-head { display: flex; flex-direction: column; gap: 2px; }
+.pcard-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pcard-row b { white-space: nowrap; }
 .pcard-head b { font-size: 15px; }
 .ppi { color: var(--ink-2); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .ppi::before { content: "· "; color: var(--muted); }
-.pcard-head small { flex-basis: 100%; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pcard-head small { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .qrefresh { margin-left: auto; background: none; border: 1px solid transparent; padding: 0 5px; color: var(--muted); font-size: 13px; line-height: 1.3; }
 .qrefresh:hover { color: var(--ink); border-color: var(--border); }
 .qrefresh.spin { animation: spin 1s linear infinite; }

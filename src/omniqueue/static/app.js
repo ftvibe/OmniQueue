@@ -743,11 +743,12 @@
       : storedDays > p.coverage_days + 1 ? ` · updating history: ${Math.round(p.coverage_days)} of ${Math.round(storedDays)} d`
       : ` · loading history: ${Math.round(p.coverage_days)} d so far`;
     card.append(el("div", { class: "pcard-head" },
-      el("span", { class: "w-cpill", style: `background:${color};color:#fff` }, p.cluster),
-      el("b", {}, p.project),
-      p.pi ? el("span", { class: "ppi", title: "PI, from project_pis in the config" }, p.pi) : null,
-      el("button", { class: `qrefresh ${p.queue_fetching ? "spin" : ""}`, title: "re-read this cluster's project queue now (squeue only, no accounting)",
-        onclick: (e) => { e.stopPropagation(); refreshQueue(p.cluster); } }, "↻"),
+      el("div", { class: "pcard-row" },
+        el("span", { class: "w-cpill", style: `background:${color};color:#fff` }, p.cluster),
+        el("b", {}, p.project),
+        p.pi ? el("span", { class: "ppi", title: `PI: ${p.pi} (project_pis in the config)` }, p.pi) : null,
+        el("button", { class: `qrefresh ${p.queue_fetching ? "spin" : ""}`, title: "re-read this cluster's project queue now (squeue only, no accounting)",
+          onclick: (e) => { e.stopPropagation(); refreshQueue(p.cluster); } }, "↻")),
       el("small", { class: "muted", title: `queue as of ${p.updated ? clock(p.updated) : "–"}; the full poll (accounting, fairshare, load) runs every ${fmtEvery(p.refresh_seconds)} in the background, next ${p.next_poll ? clock(p.next_poll).slice(0, 5) : "–"}` },
         `${updated} · every ${fmtEvery(p.refresh_seconds)}${cover}`)));
     if (p.error && !p.updated) {
