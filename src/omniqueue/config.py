@@ -48,6 +48,7 @@ class ClusterConfig:
     project_gpu_quotas: dict[str, float] = field(default_factory=dict)  # project -> GPU-hours per 30 days (optional)
     project_pis: dict[str, str] = field(default_factory=dict)  # project -> PI (or any label) shown next to the project name
     gpu_partitions: list[str] = field(default_factory=list)  # partitions counted as GPU; [] = detect from sinfo gres
+    gpus_per_node: dict[str, int] = field(default_factory=dict)  # partition -> GPUs per node, when sinfo reports no gres
     gpu_hour_factor: float = 1.0  # GPU-hours billed per Slurm GPU unit and hour (LUMI-G: 0.5, two units per MI250X)
     project_refresh_seconds: int | None = None  # how often the projects are polled here; None = global default
     nice: int = 0  # the --nice you usually submit with on this cluster (lowers priority; used by the predictor)
@@ -166,6 +167,7 @@ host = "tetralith"               # ssh alias
 # project_gpu_quotas = { "naiss2025-1-23" = 2000 } # GPU-hours per 30 days (GPU jobs are counted separately from CPU jobs)
 # project_pis = { "naiss2025-1-23" = "A. Nilsson" } # PI (or any label) shown next to the project name
 # gpu_partitions = ["gpu"]       # partitions whose jobs count as GPU jobs; default: those sinfo reports GPUs for
+# gpus_per_node = { gpu = 4 }    # GPUs per node of a partition when sinfo reports no gres (whole-node GPU jobs)
 # gpu_hour_factor = 0.5          # GPU-hours billed per Slurm GPU unit: LUMI-G shows 8 units per node for 4 MI250X
                                  # and bills each unit as half a GPU-hour; default 1.0
 # project_refresh_seconds = 3600 # poll the projects on this cluster every hour instead of the global 2 h
@@ -292,6 +294,9 @@ def config_from_dict(raw: dict) -> Config:
             for proj, hours in quotas.items():
                 if not isinstance(hours, (int, float)) or hours <= 0:
                     raise ConfigError(f"clusters[{i}] ({c['name']}).{key}[{proj!r}] must be a positive number of {unit}.")
+        gpn = c.get("gpus_per_node", {})
+        if not isinstance(gpn, dict) or not all(isinstance(v, int) and v > 0 for v in gpn.values()):
+            raise ConfigError(f"clusters[{i}] ({c['name']}).gpus_per_node must be a table of partition = positive integer.")
         pis = c.get("project_pis", {})
         if not isinstance(pis, dict) or not all(isinstance(v, str) for v in pis.values()):
             raise ConfigError(f"clusters[{i}] ({c['name']}).project_pis must be a table of project = \"name\".")

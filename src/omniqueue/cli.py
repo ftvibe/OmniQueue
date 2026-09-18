@@ -66,7 +66,7 @@ def _projects(cfg: Config, collector: Collector, args) -> ProjectPoller | None:
         poller = ProjectPoller(cfg, store, collector)
     # "my usage" borrows what the project poll learned: threads per core and GPU partitions
     collector.tpc_hook = lambda: {c.name: store.tpc_map(c.name) for c in cfg.enabled_clusters}
-    collector.gpu_partitions_hook = lambda: {c.name: store.gpu_partitions(c.name, c.gpu_partitions) for c in cfg.enabled_clusters}
+    collector.gpu_partitions_hook = lambda: {c.name: store.gpu_partitions(c.name, list(c.gpu_partitions) + list(c.gpus_per_node)) for c in cfg.enabled_clusters}
     return poller
 
 

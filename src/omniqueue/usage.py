@@ -52,8 +52,9 @@ def own_usage(config: Config, jobs_by_cluster: dict[str, list[Job]], now: float 
         cfg = clusters.get(cname)
         if cfg is None:
             continue
-        gpn = (gpus_per_node or {}).get(cname, {})
-        gpu_parts = set(cfg.gpu_partitions) | set((learned_gpu_partitions or {}).get(cname, set()))
+        gpn = dict((gpus_per_node or {}).get(cname, {}))
+        gpn.update(cfg.gpus_per_node)  # the config knows better than an empty sinfo gres
+        gpu_parts = set(cfg.gpu_partitions) | set(cfg.gpus_per_node) | set((learned_gpu_partitions or {}).get(cname, set()))
         gpu_parts.update(part for part, n in gpn.items() if n > 0)
         gpu_parts.update(j.partition for j in jobs if j.gpus and j.partition)
         tpc_map = (tpc or {}).get(cname, {})

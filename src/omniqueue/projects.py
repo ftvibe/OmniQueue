@@ -301,7 +301,8 @@ class ProjectStore:
 
     def summary(self, cluster: str, project: str, now: float, me: str | None = None,
                 quota_core_h: float | None = None, quota_gpu_h: float | None = None,
-                gpu_partitions: list[str] | None = None, gpu_factor: float = 1.0) -> dict[str, Any]:
+                gpu_partitions: list[str] | None = None, gpu_factor: float = 1.0,
+                gpus_per_node: dict[str, int] | None = None) -> dict[str, Any]:
         """Everything the project card shows, computed from the store.
 
         ``gpu_factor`` converts Slurm GPU units into billed GPUs: LUMI-G exposes each
@@ -314,7 +315,8 @@ class ProjectStore:
         jobs = self.jobs(cluster, project)
         tpc = self.tpc_map(cluster)
         gpn = self.gpn_map(cluster)
-        gpu_parts = self.gpu_partitions(cluster, gpu_partitions)
+        gpn.update(gpus_per_node or {})  # configured sizes win over an empty sinfo gres
+        gpu_parts = self.gpu_partitions(cluster, list(gpu_partitions or []) + list(gpus_per_node or {}))
 
         def cores_of(rec: dict) -> float:
             return (rec.get("cpus") or 0) / max(1, tpc.get(rec.get("partition") or "", 1))
@@ -807,7 +809,7 @@ class ProjectPoller:
             for proj in c.projects:
                 s = self.store.summary(c.name, proj, now, me=self.me(c), quota_core_h=c.project_quotas.get(proj),
                                        quota_gpu_h=c.project_gpu_quotas.get(proj), gpu_partitions=c.gpu_partitions,
-                                       gpu_factor=c.gpu_hour_factor)
+                                       gpu_factor=c.gpu_hour_factor, gpus_per_node=c.gpus_per_node)
                 s["color"] = st["color"]
                 s["pi"] = c.project_pis.get(proj)
                 s["error"] = st["error"]
@@ -843,8 +845,8 @@ class ProjectPoller:
                 partitions[part] = {
                     "samples": ss, "time_limit_s": last.get("time_limit_s"), "total_nodes": last.get("total"),
                     "cores_per_node": (last.get("cpus_per_node") or 0) // max(1, last.get("tpc") or 1),
-                    "gpus_per_node": last.get("gpus_per_node") or 0,
-                    "gpu": part in self.store.gpu_partitions(c.name, c.gpu_partitions),
+                    "gpus_per_node": c.gpus_per_node.get(part) or last.get("gpus_per_node") or 0,
+                    "gpu": part in self.store.gpu_partitions(c.name, list(c.gpu_partitions) + list(c.gpus_per_node)),
                     "typical_hours": self.store.typical_hours(c.name, part),
                 }
             me = self.me(c)
@@ -852,7 +854,7 @@ class ProjectPoller:
             for proj in c.projects:
                 summ = self.store.summary(c.name, proj, now, me=me, quota_core_h=c.project_quotas.get(proj),
                                           quota_gpu_h=c.project_gpu_quotas.get(proj), gpu_partitions=c.gpu_partitions,
-                                          gpu_factor=c.gpu_hour_factor)
+                                          gpu_factor=c.gpu_hour_factor, gpus_per_node=c.gpus_per_node)
                 sh = summ.get("shares") or {}
                 projs[proj] = {
                     "fairshare_me": (sh.get("users", {}).get(me) or {}).get("fairshare"),

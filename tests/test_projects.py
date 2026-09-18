@@ -162,6 +162,11 @@ class StoreTests(unittest.TestCase):
             self.assertEqual(s["jobs_now"][1]["gpus"], 2)
             self.assertEqual(s["jobs_now"][4]["gpus"], 1)
             self.assertEqual(s["jobs_now"][0]["name"], "vasp-relax")
+            # a configured node size makes a partition a GPU partition and sizes whole-node jobs there
+            w = store.summary("c1", "proj-a", NOW, gpus_per_node={"main": 4})
+            self.assertIn("main", w["gpu_partitions"])
+            self.assertEqual(w["running"]["gpu"]["jobs"], 2)  # 501 (4 nodes on main) joins 505
+            self.assertEqual(w["running"]["gpu"]["gpus"], 4 * 4 + 2)
             # LUMI-style billing: two Slurm units per GPU, half a GPU-hour each; the factor only prices
             # GPU-hours, what is in use stays in Slurm units
             h = store.summary("c1", "proj-a", NOW, quota_gpu_h=500, gpu_factor=0.5)
@@ -392,6 +397,9 @@ class ConfigTests(unittest.TestCase):
             config_from_dict({"clusters": [{"name": "a", "host": "a", "gpu_hour_factor": 0}]})
         with self.assertRaises(ConfigError):
             config_from_dict({"clusters": [{"name": "a", "host": "a", "project_pis": {"p": 3}}]})
+        with self.assertRaises(ConfigError):
+            config_from_dict({"clusters": [{"name": "a", "host": "a", "gpus_per_node": {"gpu": 0}}]})
+        self.assertEqual(config_from_dict({"clusters": [{"name": "a", "host": "a", "gpus_per_node": {"gpu": 4}}]}).clusters[0].gpus_per_node, {"gpu": 4})
         self.assertEqual(config_from_dict({"clusters": [{"name": "a", "host": "a", "project_pis": {"p": "X"}}]}).clusters[0].project_pis, {"p": "X"})
         self.assertEqual(config_from_dict({"clusters": [{"name": "a", "host": "a", "gpu_hour_factor": 0.5}]}).clusters[0].gpu_hour_factor, 0.5)
 

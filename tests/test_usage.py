@@ -76,6 +76,13 @@ class OwnUsageTests(unittest.TestCase):
         # without the sinfo knowledge the same jobs would count as CPU jobs
         q = own_usage(_cfg(), {"c": jobs}, now=NOW)[0]
         self.assertEqual(q["usage"]["7"]["cpu"]["jobs"], 2)
+        # ... unless the config states the size (Dardel: sinfo shows no gres for the gpu partition)
+        r = own_usage(_cfg(gpus_per_node={"gpu": 4}), {"c": jobs}, now=NOW)[0]
+        self.assertEqual(r["usage"]["7"]["gpu"]["jobs"], 2)
+        self.assertAlmostEqual(r["usage"]["7"]["gpu"]["gpu_h"], 20, delta=0.05)
+        # and the config wins over a sinfo that reports a smaller/absent gres
+        t = own_usage(_cfg(gpus_per_node={"gpu": 4}), {"c": jobs}, now=NOW, gpus_per_node={"c": {"gpu": 0}})[0]
+        self.assertAlmostEqual(t["usage"]["7"]["gpu"]["gpu_h"], 20, delta=0.05)
 
     def test_threads_per_core(self):
         p = own_usage(_cfg(), {"c": JOBS}, now=NOW, tpc={"c": {"main": 2}})[0]

@@ -77,6 +77,7 @@ host = "tetralith"          # anything ssh accepts, aliases from ~/.ssh/config i
 # project_gpu_quotas = { "naiss2025-1-23" = 2000 } # GPU-hours per 30 days; GPU jobs are kept apart from CPU jobs
 # project_pis = { "naiss2025-1-23" = "A. Nilsson" }   # PI (or any label) shown next to the project name
 # gpu_partitions = ["gpu"]                         # which partitions are GPU ones; default: those sinfo reports GPUs for
+# gpus_per_node = { gpu = 4 }                      # GPUs per node where sinfo reports no gres (whole-node GPU jobs, e.g. Dardel)
 # gpu_hour_factor = 0.5                            # GPU-hours per Slurm GPU unit and hour (LUMI-G: 8 units per node for 4 MI250X)
 # project_refresh_seconds = 3600                  # poll this cluster's projects hourly instead of the global 2 h
 # nice = 0                  # the --nice you usually submit with here (the experimental predictor accounts for it)
@@ -256,8 +257,10 @@ cluster names from your config, `list --state` the job states.
   reports GPUs for (asked on the first poll and every 6 hours, remembered in
   the history file) plus the `gpu_partitions` list; a whole-node job on such a
   partition that never asked for a gres, as on Dardel, counts as nodes x GPUs
-  per node. `gpu_hour_factor` converts Slurm GPU units into billed GPU-hours
-  (LUMI-G: 0.5). The first poll of a fresh install
+  per node. Where `sinfo` reports no gres at all, `gpus_per_node = { gpu = 4 }`
+  states the node size (it also marks the partition as a GPU one).
+  `gpu_hour_factor` converts Slurm GPU units into billed GPU-hours (LUMI-G:
+  0.5). The first poll of a fresh install
   asks `sacct` for the whole `history_days` window once, so the 30-day figures
   are complete from the start; afterwards finished jobs stay in the local
   history. The ▾ (or `u`) collapses the row to one pill per project.
