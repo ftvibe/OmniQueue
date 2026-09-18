@@ -368,8 +368,15 @@ def cmd_projects(args) -> int:
         else:
             print("no cluster lists `projects` in the config; add e.g. projects = [\"naiss2025-1-23\"] to a [[clusters]] entry")
         return 2
+    wanted = set(getattr(args, "cluster", None) or [])
+    unknown = wanted - {c.name for c in cfg.project_clusters}
+    if unknown:
+        print("no project cluster named " + ", ".join(sorted(unknown)) + "; clusters with projects: "
+              + ", ".join(c.name for c in cfg.project_clusters))
+        return 2
+    clusters = [c for c in cfg.project_clusters if not wanted or c.name in wanted]
     if args.poll:
-        poller.refresh(cfg.project_clusters)
+        poller.refresh(clusters)
 
         def progress(todo):
             print("back-filling history: " + ", ".join(
@@ -377,6 +384,8 @@ def cmd_projects(args) -> int:
         poller.backfill_all(progress)
     snap = poller.snapshot()
     for p in snap["projects"]:
+        if wanted and p["cluster"] not in wanted:
+            continue
         upd = time.strftime("%Y-%m-%d %H:%M", time.localtime(p["updated"])) if p["updated"] else "never"
         extra = [a for a in p.get("accounts", []) if a != p["project"]]
         head = f"== {p['cluster']} / {p['project']}" + (f" ({p['pi']})" if p.get("pi") else "") + (f" + {', '.join(extra)}" if extra else "") \
@@ -537,6 +546,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("projects", help="show who runs how much in your projects (from the slow background poll)")
     s.add_argument("--poll", action="store_true", help="poll the clusters now instead of showing the stored data")
     s.add_argument("--partitions", action="store_true", help="per partition: jobs, GPU classification, core-h and GPU-h (30 d)")
+    s.add_argument("cluster", nargs="*", help="only these clusters (default: all with projects)")
     s.set_defaults(func=cmd_projects)
 
     s = sub.add_parser("usage", help="your own usage per project from the stored history; --jobs shows how each job was classified")
