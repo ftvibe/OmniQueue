@@ -10,6 +10,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+# "user": your own jobs and your own usage per project; "pi": also the project-wide poll,
+# cards and predictor.  The USER-version branch of OmniQueue sets this to "user".
+DEFAULT_MODE = "pi"
+
+
 def default_config_path() -> Path:
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(Path.home(), ".config")
     return Path(base) / "omniqueue" / "config.toml"
@@ -55,6 +60,7 @@ class ClusterConfig:
 @dataclass
 class Config:
     clusters: list[ClusterConfig]
+    mode: str = DEFAULT_MODE  # "user" | "pi"
     refresh_seconds: int = 60
     lookback_hours: int = 72  # how far back sacct is asked for finished jobs
     history_days: int = 30  # how long finished jobs stay in the local store
@@ -86,6 +92,9 @@ class Config:
 
     @property
     def project_clusters(self) -> list[ClusterConfig]:
+        """Clusters whose projects are watched as a whole: none in user mode."""
+        if self.mode != "pi":
+            return []
         return [c for c in self.enabled_clusters if c.projects]
 
     @property
@@ -116,8 +125,10 @@ EXAMPLE_CONFIG = """\
 # alias from ~/.ssh/config (with ProxyJump, keys, ControlMaster, ...) works.
 # Password prompts are not supported: set up keys or an ssh agent first.
 
+# mode = "pi"             # "user": your jobs and your usage per project; "pi": also whole projects,
+                          # their cards and the predictor (needs `projects` on a cluster). Default: __MODE__
 refresh_seconds = 60      # how often every cluster is polled
-lookback_hours  = 72      # how far back sacct is asked for finished jobs
+lookback_hours  = 72      # how far back sacct is asked for finished jobs (the first poll takes history_days)
 history_days    = 30      # finished jobs stay in the local history this long
 ssh_timeout     = 20      # seconds before a hanging ssh is given up on
 persist_connections = true   # keep one ssh connection per cluster open between polls
@@ -309,6 +320,10 @@ def config_from_dict(raw: dict) -> Config:
             raise ConfigError("`access_token` must be at least 16 characters.")
     if "listen_host" in raw:
         cfg.listen_host = str(raw["listen_host"])
+    if "mode" in raw:
+        cfg.mode = str(raw["mode"]).lower()
+        if cfg.mode not in ("user", "pi"):
+            raise ConfigError('`mode` must be "user" (own jobs and usage) or "pi" (also whole projects).')
     if "data_dir" in raw:
         cfg.data_dir = Path(os.path.expanduser(str(raw["data_dir"])))
     if "logo_dir" in raw:
@@ -360,6 +375,6 @@ def write_example_config(path: Path, force: bool = False) -> Path:
     if path.exists() and not force:
         raise ConfigError(f"{path} already exists (use --force to overwrite).")
     secure_dir(path.parent)
-    path.write_text(EXAMPLE_CONFIG)
+    path.write_text(EXAMPLE_CONFIG.replace("__MODE__", DEFAULT_MODE))
     os.chmod(path, 0o600)
     return path

@@ -124,6 +124,9 @@ kbd { font: 11px var(--mono); background: var(--surface-2); border: 1px solid va
 .proj-title .muted { font-weight: 400; margin-left: 6px; }
 .proj-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 12px; align-items: stretch; }
 .pcard { cursor: pointer; min-height: 0; gap: 8px; }
+.pcard.ucard { cursor: default; }
+.pcard.ucard:hover { border-color: var(--border); }
+.gpu-tag { margin-left: 6px; font-size: 10px; color: var(--pending); border: 1px solid var(--pending); border-radius: 999px; padding: 0 5px; vertical-align: 1px; }
 .pcard:hover { border-color: var(--accent); border-left-color: var(--card-color); }
 .pcard-head { display: flex; flex-direction: column; gap: 2px; }
 .pcard-row { display: flex; align-items: center; gap: 8px; min-width: 0; }

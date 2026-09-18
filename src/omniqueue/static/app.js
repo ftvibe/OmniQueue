@@ -17,6 +17,7 @@
     hiddenClusters: new Set(prefs.hiddenClusters || []),
     windowHours: prefs.windowHours ?? 72,
     projectsCollapsed: !!prefs.projectsCollapsed,
+    usageCollapsed: !!prefs.usageCollapsed,
     selected: null,
     error: null,
     matches: new Map(), // job key -> fuzzy match info for the current search
@@ -39,7 +40,7 @@
     try {
       localStorage.setItem("omniqueue.prefs", JSON.stringify({
         tab: state.tab, sort: state.sort, hiddenClusters: [...state.hiddenClusters], windowHours: state.windowHours,
-        projectsCollapsed: state.projectsCollapsed,
+        projectsCollapsed: state.projectsCollapsed, usageCollapsed: state.usageCollapsed,
       }));
     } catch { /* ignore */ }
   }
@@ -260,6 +261,7 @@
   function render() {
     renderHeader();
     renderClusters();
+    renderUsage();
     renderTabs();
     renderView();
     if (state.selected) renderDrawer();
@@ -582,7 +584,7 @@
       el("td", {}, el("span", { class: `state ${j.category}` }, stateLabel(j.state))),
       el("td", { class: "num mono" }, elapsedCell(j)),
       el("td", { class: "num mono" }, fmtDuration(j.time_limit_s)),
-      el("td", { class: "num" }, j.nodes || "–"),
+      el("td", { class: "num", title: j.gpus ? `${j.gpus} GPUs (Slurm units)` : "" }, j.nodes || "–", j.gpus ? el("span", { class: "gpu-tag" }, `${j.gpus} GPU`) : null),
       el("td", { class: "mono", title: j.submit_time }, fmtTime(j.submit_time)),
       pendingEstimate
         ? el("td", { class: "mono estimate", title: `Slurm's estimated start (backfill): ${j.start_time}` }, `~${fmtTime(j.start_time)}`)
@@ -655,6 +657,7 @@
       ["queue wait", waitTime(j)],
       ["nodes", `${j.nodes || "–"}${j.node_list ? "  " + j.node_list : ""}`],
       ["cpus", j.cpus || "–"],
+      ["gpus", j.gpus ? `${j.gpus} (Slurm GPU units)` : "–"],
       ["partition", j.partition || "–"],
       ["account", j.account || "–"],
       ["user", j.user || "–"],
@@ -670,6 +673,93 @@
     if (!s || !st) return "–";
     return fmtDuration((st - s) / 1000);
   }
+
+  // ---------- my usage (own jobs, per project; no cluster access beyond the regular poll) ----------
+  // A day chart: bars per day with a scale line at the busiest day and a faint one at half of it.
+  // `segments(d)` returns [[colour, value]] for one day (one segment for a single user).
+  function dayChart(daily, key, unit, segments, extraClass = "") {
+    const peak = Math.max(...daily.map((d) => d[key]), 0);
+    const max = Math.max(1, peak);
+    const chart = el("div", { class: `pdaily ${extraClass}`, title: `${unit} per day, last 30 days; the top line is the busiest day (${Math.round(peak).toLocaleString("en")} ${unit}), the faint line half of it` });
+    chart.append(el("span", { class: "pscale peak" }, peak > 0 ? el("b", {}, `${fmtCoreH(peak)} ${unit}`) : null),
+                 el("span", { class: "pscale half" }, peak > 0 ? el("b", {}, fmtCoreH(peak / 2)) : null));
+    for (const d of daily) {
+      const col = el("div", { class: "pday", title: `${d.date}: ${Math.round(d[key]).toLocaleString("en").replace(/,/g, " ")} ${unit}` });
+      for (const [colour, v] of segments(d)) if (v > 0) col.append(el("i", { style: `height:${(v / max * 100).toFixed(1)}%;background:${colour}` }));
+      chart.append(col);
+    }
+    return chart;
+  }
+  function quotaEl(q, unit) {
+    const frac = q.fraction ?? 0;
+    return el("span", { class: "pquota", title: q.window === "30 d" ? `${unit} used in the last 30 days against the configured monthly quota` : "Slurm accounting limit from sshare (GrpTRESMins)" },
+      el("span", { class: "gauge-bar " + (frac > 0.9 ? "hot" : "") }, el("i", { style: `width:${(frac * 100).toFixed(1)}%` })),
+      `${fmtCoreH(q.used_h)} / ${fmtCoreH(q.limit_h)} ${unit} (${q.window})`);
+  }
+  const usageRowLine = (label, main, muted, title) => el("div", { class: "prow" }, el("span", { class: "plabel" }, label),
+    el("span", { class: "pval", title }, main, muted ? el("span", { class: "muted" }, ` · ${muted}`) : null), el("span"));
+
+  function usageCard(u) {
+    const color = clusterColor(u.cluster);
+    const card = el("article", { class: "card pcard ucard", style: `--card-color:${color}` });
+    card.append(el("div", { class: "pcard-head" }, el("div", { class: "pcard-row" },
+      el("span", { class: "w-cpill", style: `background:${color};color:#fff` }, u.cluster),
+      el("b", {}, u.account), u.pi ? el("span", { class: "ppi", title: `PI: ${u.pi} (project_pis in the config)` }, u.pi) : null),
+      el("small", { class: "muted", title: "your own jobs in this project, from the local job history" },
+        `${plural(u.jobs_known, "job")} of yours known` + (u.oldest ? ` · since ${fmtTime(new Date(u.oldest * 1000).toISOString().slice(0, 19))}` : ""))));
+    const rc = u.running.cpu, rg = u.running.gpu, qc = u.pending.cpu, qg = u.pending.gpu, u30 = u.usage["30"], u7 = u.usage["7"];
+    const rows = el("div", { class: "prows" });
+    rows.append(usageRowLine(u.has_gpu ? "cpu now" : "running now", `${plural(rc.jobs, "job")} · ${fmtInt(Math.round(rc.cores))} cores`, qc.jobs ? `${fmtInt(qc.jobs)} waiting` : "",
+      `${rc.jobs} of your CPU jobs running on ${rc.nodes} nodes, ${qc.jobs} waiting`));
+    rows.append(usageRowLine(u.has_gpu ? "cpu 30 d" : "last 30 d", `${fmtCoreH(u30.cpu.core_h)} core-h · ${plural(u30.cpu.jobs, "job")}`, `7 d ${fmtCoreH(u7.cpu.core_h)}`,
+      `${Math.round(u30.cpu.core_h).toLocaleString("en")} core-hours in ${u30.cpu.jobs} CPU jobs over 30 days; ${Math.round(u7.cpu.core_h).toLocaleString("en")} in the last 7 days`));
+    if (u.has_gpu) {
+      rows.append(usageRowLine("gpu now", `${plural(rg.jobs, "job")} · ${fmtInt(rg.gpus)} GPUs`, qg.jobs ? `${fmtInt(qg.jobs)} waiting` : "",
+        `${rg.jobs} of your GPU jobs running on ${rg.nodes} nodes (Slurm GPU units), ${qg.jobs} waiting` + (u.gpu_partitions.length ? `; GPU partitions: ${u.gpu_partitions.join(", ")}` : "")));
+      rows.append(usageRowLine("gpu 30 d", `${fmtCoreH(u30.gpu.gpu_h)} GPU-h · ${plural(u30.gpu.jobs, "job")}`, `7 d ${fmtCoreH(u7.gpu.gpu_h)}`,
+        `${Math.round(u30.gpu.gpu_h).toLocaleString("en")} GPU-hours in ${u30.gpu.jobs} GPU jobs over 30 days` + (u.gpu_factor !== 1 ? `, billed at ${u.gpu_factor} GPU-h per Slurm GPU unit and hour` : "")));
+    }
+    card.append(rows);
+    card.append(dayChart(u.daily, "core_h", "core-h", (d) => [[color, d.core_h]]));
+    if (u.has_gpu && u.daily.some((d) => d.gpu_h > 0)) card.append(el("div", { class: "pchart-label" }, "GPU-h per day"), dayChart(u.daily, "gpu_h", "GPU-h", (d) => [["var(--pending)", d.gpu_h]], "gpu"));
+    const foot = el("div", { class: "card-foot" });
+    if (u.quota) foot.append(quotaEl(u.quota, "core-h"));
+    if (u.gpu_quota) foot.append(quotaEl(u.gpu_quota, "GPU-h"));
+    if (foot.childElementCount) card.append(foot);
+    return card;
+  }
+
+  function renderUsage() {
+    const sec = $("#usage");
+    const list = state.snapshot?.usage || [];
+    if (!list.length) { sec.hidden = true; return; }
+    sec.hidden = false;
+    const collapsed = state.usageCollapsed;
+    sec.classList.toggle("collapsed", collapsed);
+    $("#usage-toggle").textContent = collapsed ? "▸" : "▾";
+    $("#usage-toggle").title = collapsed ? "show my usage (u)" : "collapse my usage (u)";
+    $("#usage-status").textContent = `your own jobs per project, from the local history (${state.snapshot.history_days} d kept); CPU and GPU jobs apart`;
+    $("#usage-cards").hidden = collapsed;
+    $("#usage-compact").hidden = !collapsed;
+    if (collapsed) {
+      $("#usage-compact").replaceChildren(...list.map((u) => {
+        const color = clusterColor(u.cluster);
+        const u30 = u.usage["30"];
+        const text = `${plural(u.running.cpu.jobs + u.running.gpu.jobs, "job")} running · ${fmtCoreH(u30.cpu.core_h)} core-h` + (u.has_gpu ? ` · ${fmtCoreH(u30.gpu.gpu_h)} GPU-h` : "") + " / 30 d";
+        return el("span", { class: "pmini", style: `--card-color:${color}`, title: `${u.cluster} · ${u.account}: ${text} (click to expand)`, onclick: toggleUsage },
+          el("span", { class: "w-cpill", style: `background:${color};color:#fff` }, u.cluster), el("b", {}, u.account), u.pi ? el("span", { class: "ppi" }, u.pi) : null, el("span", { class: "muted" }, text));
+      }));
+    } else {
+      $("#usage-cards").replaceChildren(...list.map(usageCard));
+    }
+  }
+  function toggleUsage() {
+    state.usageCollapsed = !state.usageCollapsed;
+    savePrefs();
+    renderUsage();
+  }
+  $("#usage-toggle").addEventListener("click", toggleUsage);
+  $(".usage-title").addEventListener("click", toggleUsage);
 
   // ---------- projects (slow background poll, own card row) ----------
   // The server polls each cluster's projects every few hours on its own; the page only
@@ -784,25 +874,9 @@
     card.append(rows);
     // daily chart(s), stacked by user: core-hours, and GPU-hours when the project has any
     const daily = p.daily || [];
-    const dailyChart = (key, usersKey, unit) => {
-      const peak = Math.max(...daily.map((d) => d[key]), 0);
-      const max = Math.max(1, peak);
-      const chart = el("div", { class: `pdaily ${key === "gpu_h" ? "gpu" : ""}`, title: `${unit} per day, last 30 days; the top line is the busiest day (${Math.round(peak).toLocaleString("en")} ${unit}), the faint line half of it` });
-      // y scale: the peak day at the top, half of it as a faint midline
-      chart.append(el("span", { class: "pscale peak" }, peak > 0 ? el("b", {}, `${fmtCoreH(peak)} ${unit}`) : null),
-                   el("span", { class: "pscale half" }, peak > 0 ? el("b", {}, fmtCoreH(peak / 2)) : null));
-      for (const d of daily) {
-        const col = el("div", { class: "pday", title: `${d.date}: ${Math.round(d[key]).toLocaleString("en").replace(/,/g, " ")} ${unit}` });
-        for (const u of users) {
-          const v = d[usersKey][u] || 0;
-          if (v > 0) col.append(el("i", { style: `height:${(v / max * 100).toFixed(1)}%;background:${userColor(u)}` }));
-        }
-        chart.append(col);
-      }
-      return chart;
-    };
-    card.append(dailyChart("core_h", "users", "core-h"));
-    if (p.has_gpu && daily.some((d) => d.gpu_h > 0)) card.append(el("div", { class: "pchart-label" }, "GPU-h per day"), dailyChart("gpu_h", "gpu_users", "GPU-h"));
+    const byUser = (usersKey) => (d) => users.map((u) => [userColor(u), d[usersKey][u] || 0]);
+    card.append(dayChart(daily, "core_h", "core-h", byUser("users")));
+    if (p.has_gpu && daily.some((d) => d.gpu_h > 0)) card.append(el("div", { class: "pchart-label" }, "GPU-h per day"), dayChart(daily, "gpu_h", "GPU-h", byUser("gpu_users"), "gpu"));
     // user legend: core-hours, and GPU-hours where they have any
     const legend = el("div", { class: `pusers ${users.length > 8 ? "many" : ""}` });
     for (const u of users) {
@@ -814,12 +888,6 @@
     }
     card.append(legend);
     const foot = el("div", { class: "card-foot" });
-    const quotaEl = (q, unit) => {
-      const frac = q.fraction ?? 0;
-      return el("span", { class: "pquota", title: q.window === "30 d" ? `${unit} used in the last 30 days against the configured monthly quota` : `Slurm accounting limit from sshare (GrpTRESMins)` },
-        el("span", { class: "gauge-bar " + (frac > 0.9 ? "hot" : "") }, el("i", { style: `width:${(frac * 100).toFixed(1)}%` })),
-        `${fmtCoreH(q.used_h)} / ${fmtCoreH(q.limit_h)} ${unit} (${q.window})`);
-    };
     if (p.quota) foot.append(quotaEl(p.quota, "core-h"));
     if (p.gpu_quota) foot.append(quotaEl(p.gpu_quota, "GPU-h"));
     if (p.shares?.fairshare != null) {
@@ -1027,7 +1095,7 @@
   // ---------- wiring ----------
   $("#refresh").addEventListener("click", requestRefresh);
   $("#search").addEventListener("input", (e) => {
-    if (e.target.value.trim().toLowerCase() === "experimental") {  // the magic word toggles the experimental view
+    if (e.target.value.trim().toLowerCase() === "experimental" && state.snapshot?.mode !== "user") {  // the magic word toggles the experimental view
       e.target.value = "";
       state.search = "";
       setExperimental(!state.experimental);
@@ -1067,6 +1135,7 @@
     else if (e.key === "q") leaveLoadView();
     else if (e.key === "x") enterPredictView();
     else if (e.key === "p") { if (state.projects?.enabled) toggleProjects(); }
+    else if (e.key === "u") { if (state.snapshot?.usage?.length) toggleUsage(); }
     else if (e.key === "w") openWidget();
     else if (e.key === "e") toggleAllArrays();
     else if (e.key === "Escape") { if (state.selected) closeDrawer(); else leaveLoadView(); }

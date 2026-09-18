@@ -15,28 +15,28 @@ from omniqueue.slurm import (
 
 SQUEUE_OUT = (
     "1234567|RUNNING|x_flotr|tetralith|naiss2024-1-1|4|128|n[101-104]|None|1:02:03|1-00:00:00"
-    "|2026-09-16T08:00:00|2026-09-16T09:00:00|/proj/x/run1|vasp-relax|weird|name\n"
+    "|2026-09-16T08:00:00|2026-09-16T09:00:00|/proj/x/run1|N/A|vasp-relax|weird|name\n"
     "1234568|PENDING|x_flotr|tetralith|naiss2024-1-1|8|256||Priority|0:00|12:00:00"
-    "|2026-09-16T10:00:00|N/A|/proj/x/run2|qe-scf\n"
+    "|2026-09-16T10:00:00|N/A|/proj/x/run2|gpu:a100:2|qe-scf\n"
     "1234570_[1-3]|PD|x_flotr|tetralith|naiss2024-1-1|1|32||Resources|0:00|02:00:00"
-    "|2026-09-16T10:05:00|N/A|/proj/x/arr|array-job\n"
+    "|2026-09-16T10:05:00|N/A|/proj/x/arr|N/A|array-job\n"
     "slurm_load_jobs error: garbage line\n"
 )
 
 SACCT_OUT = (
     "1234560|COMPLETED|x_flotr|tetralith|naiss2024-1-1|2|64|n[5-6]|None|03:10:00|04:00:00"
-    "|2026-09-15T20:00:00|2026-09-15T20:30:00|2026-09-15T23:40:00|0:0|/proj/x/done|md-npt\n"
-    "1234560.batch|COMPLETED|||naiss2024-1-1|2|64|n5||03:10:00||2026-09-15T20:30:00|2026-09-15T20:30:00|2026-09-15T23:40:00|0:0||batch\n"
+    "|2026-09-15T20:00:00|2026-09-15T20:30:00|2026-09-15T23:40:00|0:0|/proj/x/done|cpu=64,mem=200G,node=2|cpu=64,node=2|md-npt\n"
+    "1234560.batch|COMPLETED|||naiss2024-1-1|2|64|n5||03:10:00||2026-09-15T20:30:00|2026-09-15T20:30:00|2026-09-15T23:40:00|0:0||cpu=64,node=2||batch\n"
     "1234561|FAILED|x_flotr|tetralith|naiss2024-1-1|1|32|n7|None|00:00:12|01:00:00"
-    "|2026-09-15T21:00:00|2026-09-15T21:01:00|2026-09-15T21:01:12|1:0|/proj/x/bad|crashy\n"
+    "|2026-09-15T21:00:00|2026-09-15T21:01:00|2026-09-15T21:01:12|1:0|/proj/x/bad|cpu=32,node=1|cpu=32,node=1|crashy\n"
     "1234562|CANCELLED by 12345|x_flotr|tetralith|naiss2024-1-1|1|32|None assigned|None|00:00:00|01:00:00"
-    "|2026-09-15T21:00:00|Unknown|2026-09-15T21:30:00|0:0|/proj/x/c|cancelled-one\n"
+    "|2026-09-15T21:00:00|Unknown|2026-09-15T21:30:00|0:0|/proj/x/c||cpu=32,node=1|cancelled-one\n"
     "1234563|TIMEOUT|x_flotr|tetralith|naiss2024-1-1|1|32|n8|None|01:00:05|01:00:00"
-    "|2026-09-15T21:00:00|2026-09-15T21:01:00|2026-09-15T22:01:05|0:0|/proj/x/t|slow\n"
+    "|2026-09-15T21:00:00|2026-09-15T21:01:00|2026-09-15T22:01:05|0:0|/proj/x/t|cpu=32,node=1|cpu=32,node=1|slow\n"
     "1234564|OUT_OF_MEMORY|x_flotr|tetralith|naiss2024-1-1|1|32|n9|None|00:10:00|01:00:00"
-    "|2026-09-15T21:00:00|2026-09-15T21:01:00|2026-09-15T21:11:00|0:125|/proj/x/o|hungry\n"
+    "|2026-09-15T21:00:00|2026-09-15T21:01:00|2026-09-15T21:11:00|0:125|/proj/x/o|cpu=32,gres/gpu=4,node=1|cpu=32,gres/gpu=4,node=1|hungry\n"
     "1234567|RUNNING|x_flotr|tetralith|naiss2024-1-1|4|128|n[101-104]|None|01:00:00|1-00:00:00"
-    "|2026-09-16T08:00:00|2026-09-16T09:00:00|Unknown|0:0|/proj/x/run1|vasp-relax|weird|name\n"
+    "|2026-09-16T08:00:00|2026-09-16T09:00:00|Unknown|0:0|/proj/x/run1|cpu=128,node=4|cpu=128,node=4|vasp-relax|weird|name\n"
 )
 
 
@@ -138,6 +138,19 @@ class SacctTests(unittest.TestCase):
 
 
 class MergeTests(unittest.TestCase):
+    def test_gpus(self):
+        sq = {j.job_id: j for j in parse_squeue(SQUEUE_OUT, "c")}
+        self.assertEqual(sq["1234567"].gpus, 0)
+        self.assertEqual(sq["1234568"].gpus, 16)  # gpu:a100:2 per node x 8 nodes
+        sa = {j.job_id: j for j in parse_sacct(SACCT_OUT, "c")}
+        self.assertEqual(sa["1234564"].gpus, 4)
+        self.assertEqual(sa["1234560"].gpus, 0)
+        from omniqueue.slurm import apply_tres
+
+        jobs = parse_squeue(SQUEUE_OUT, "c")
+        apply_tres(jobs, {"1234567": 8})
+        self.assertEqual({j.job_id: j.gpus for j in jobs}["1234567"], 8)
+
     def test_squeue_wins_but_keeps_accounting(self):
         sq = parse_squeue(SQUEUE_OUT, "t", now=1.0)
         sa = parse_sacct(SACCT_OUT, "t", now=1.0)

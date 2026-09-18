@@ -61,8 +61,13 @@ def _projects(cfg: Config, collector: Collector, args) -> ProjectPoller | None:
     if getattr(args, "demo", False):
         from .demo import DemoProjectPoller
 
-        return DemoProjectPoller(cfg, store, collector)
-    return ProjectPoller(cfg, store, collector)
+        poller = DemoProjectPoller(cfg, store, collector)
+    else:
+        poller = ProjectPoller(cfg, store, collector)
+    # "my usage" borrows what the project poll learned: threads per core and GPU partitions
+    collector.tpc_hook = lambda: {c.name: store.tpc_map(c.name) for c in cfg.enabled_clusters}
+    collector.gpu_partitions_hook = lambda: {c.name: store.gpu_partitions(c.name, c.gpu_partitions) for c in cfg.enabled_clusters}
+    return poller
 
 
 WIDGET_WIDTH, WIDGET_HEIGHT = 390, 780
@@ -313,7 +318,11 @@ def cmd_projects(args) -> int:
     collector = _collector(cfg, args)
     poller = _projects(cfg, collector, args)
     if poller is None:
-        print("no cluster lists `projects` in the config; add e.g. projects = [\"naiss2025-1-23\"] to a [[clusters]] entry")
+        if cfg.mode != "pi":
+            print('mode = "user": whole projects are not watched; your own usage per project is on the dashboard (My usage). '
+                  'Set mode = "pi" in the config to watch projects.')
+        else:
+            print("no cluster lists `projects` in the config; add e.g. projects = [\"naiss2025-1-23\"] to a [[clusters]] entry")
         return 2
     if args.poll:
         poller.refresh(cfg.project_clusters)
@@ -373,7 +382,8 @@ def cmd_predict(args) -> int:
     collector = _collector(cfg, args)
     poller = _projects(cfg, collector, args)
     if poller is None:
-        print("the predictor needs load samples, which the project poll collects: add `projects` to a cluster first")
+        print("the predictor needs load samples, which the project poll collects: "
+              + ('set mode = "pi" and ' if cfg.mode != "pi" else "") + "add `projects` to a cluster first")
         return 2
     req = Request(nodes=args.nodes, hours=args.hours, cores=args.cores, gpus=args.gpus or 0, projects=args.project or None,
                   clusters=args.cluster or None, partitions=args.partition or None)

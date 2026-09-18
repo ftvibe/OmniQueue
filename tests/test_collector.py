@@ -30,8 +30,9 @@ class CombinedCommandTests(unittest.TestCase):
 
     def test_command_shape(self):
         cmd = combined_command("me", 24, None, None, use_sacct=True)
-        self.assertEqual(cmd.count("@@OMNIQUEUE"), 2)
+        self.assertEqual(cmd.count("@@OMNIQUEUE"), 3)  # squeue, the long-format squeue (TRES), sacct
         self.assertTrue(cmd.startswith("squeue "))
+        self.assertIn("--Format=", cmd)
         self.assertIn("; sacct ", cmd)
         self.assertNotIn("sacct", combined_command("me", 24, None, None, use_sacct=False))
 

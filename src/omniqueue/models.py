@@ -111,6 +111,7 @@ class Job:
     account: str = ""
     nodes: int = 0
     cpus: int = 0
+    gpus: int = 0  # Slurm GPU units allocated (or requested while pending); 0 for CPU jobs
     node_list: str = ""
     reason: str = ""
     exit_code: str = ""

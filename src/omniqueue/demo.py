@@ -20,25 +20,32 @@ def _ts(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%S")
 
 
+_DEMO_ACCOUNTS = {"tetralith": "naiss2025-1-42", "dardel": "naiss2025-3-7", "lumi": "project_465000123"}
+_DEMO_GPU = {"dardel": ("gpu", 4), "lumi": ("standard-g", 8)}  # partition, GPU units per node
+
+
 def make_demo_jobs(cluster: str, rng: random.Random, n: int = 18) -> list[Job]:
     now = datetime.now()
     jobs: list[Job] = []
     base_id = rng.randint(100000, 900000)
+    account = _DEMO_ACCOUNTS.get(cluster, "demo-proj")
     for i in range(n):
         job_id = str(base_id + i * 7)
         name = f"{rng.choice(_NAMES)}-{rng.randint(1, 40):02d}"
         roll = rng.random()
+        gpu = cluster in _DEMO_GPU and rng.random() < 0.3
+        partition, gpus = (_DEMO_GPU[cluster][0], _DEMO_GPU[cluster][1]) if gpu else ("main", 0)
         limit = rng.choice([3600, 4 * 3600, 12 * 3600, 24 * 3600])
         submit = now - timedelta(hours=rng.uniform(0.2, 60))
         if roll < 0.25:  # running
             elapsed = int(limit * rng.uniform(0.05, 0.95))
             start = now - timedelta(seconds=elapsed)
-            jobs.append(Job(cluster, job_id, name, "RUNNING", user="demo", partition="main", nodes=rng.randint(1, 8),
+            jobs.append(Job(cluster, job_id, name, "RUNNING", user="demo", partition=partition, account=account, gpus=gpus, nodes=rng.randint(1, 8),
                             cpus=rng.randint(32, 512), node_list=f"n[{rng.randint(1,900)}-{rng.randint(901,999)}]",
                             elapsed_s=elapsed, time_limit_s=limit, submit_time=_ts(submit), start_time=_ts(start),
                             work_dir=f"/proj/demo/{name}", source="squeue", last_seen=time.time()))
         elif roll < 0.45:  # pending
-            jobs.append(Job(cluster, job_id, name, "PENDING", user="demo", partition="main", nodes=rng.randint(1, 16),
+            jobs.append(Job(cluster, job_id, name, "PENDING", user="demo", partition=partition, account=account, gpus=gpus, nodes=rng.randint(1, 16),
                             cpus=rng.randint(32, 1024), reason=rng.choice(["Priority", "Resources", "QOSMaxJobsPerUserLimit", "Dependency"]),
                             elapsed_s=0, time_limit_s=limit, submit_time=_ts(submit),
                             work_dir=f"/proj/demo/{name}", source="squeue", last_seen=time.time()))
@@ -50,7 +57,7 @@ def make_demo_jobs(cluster: str, rng: random.Random, n: int = 18) -> list[Job]:
             start = end - timedelta(seconds=elapsed)
             submit = min(submit, start - timedelta(minutes=rng.uniform(1, 300)))
             exit_code = {"FAILED": "1:0", "OUT_OF_MEMORY": "0:125", "CANCELLED": "0:15", "TIMEOUT": "0:0", "NODE_FAIL": "0:0"}.get(state, "0:0")
-            jobs.append(Job(cluster, job_id, name, state, user="demo", partition="main", nodes=rng.randint(1, 8),
+            jobs.append(Job(cluster, job_id, name, state, user="demo", partition=partition, account=account, gpus=gpus, nodes=rng.randint(1, 8),
                             cpus=rng.randint(32, 512), node_list=f"n{rng.randint(1,999)}", exit_code=exit_code,
                             reason="cancelled by uid 1000" if state == "CANCELLED" else "",
                             elapsed_s=elapsed, time_limit_s=limit, submit_time=_ts(submit), start_time=_ts(start),
@@ -100,7 +107,7 @@ def make_demo_array(cluster: str, rng: random.Random, base: int, name: str, tota
     jobs: list[Job] = []
     for t in range(1, total + 1):
         jid = f"{base}_{t}"
-        common = dict(cluster=cluster, job_id=jid, name=name, user="demo", partition="main", nodes=1, cpus=32,
+        common = dict(cluster=cluster, job_id=jid, name=name, user="demo", partition="main", account=_DEMO_ACCOUNTS.get(cluster, "demo-proj"), nodes=1, cpus=32,
                       time_limit_s=limit, submit_time=_ts(submit), work_dir=f"/proj/demo/{name}", last_seen=time.time())
         if t <= 10:  # finished
             elapsed = int(limit * rng.uniform(0.3, 0.8))

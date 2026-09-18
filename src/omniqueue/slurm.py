@@ -29,6 +29,7 @@ SQUEUE_FIELDS = [
     ("%V", "submit_time"),
     ("%S", "start_time"),
     ("%Z", "work_dir"),
+    ("%b", "gres"),  # gres per node (gpu:4); --gpus-per-node requests come from the long-format squeue instead
     ("%j", "name"),
 ]
 
@@ -49,6 +50,8 @@ SACCT_FIELDS = [
     "End",
     "ExitCode",
     "WorkDir",
+    "AllocTRES",  # gres/gpu=4 for GPU jobs
+    "ReqTRES",  # the request, for jobs that have not started
     "JobName",  # must stay last
 ]
 
@@ -110,7 +113,10 @@ def combined_command(user: str | None, lookback_hours: int, squeue_args: list[st
 
     Each command is followed by a marker line carrying its exit status.
     """
-    parts = [squeue_command(user, squeue_args), f'echo "{MARK} squeue rc=$?"']
+    parts = [squeue_command(user, squeue_args), f'echo "{MARK} squeue rc=$?"',
+             # the long format is the only squeue output that shows --gpus-per-node requests
+             f"squeue --noheader --user={_user_arg(user)} --Format={shlex.quote(SQUEUE_TRES_FORMAT)}",
+             f'echo "{MARK} squeue_tres rc=$?"']
     if use_sacct:
         parts += [sacct_command(user, lookback_hours, sacct_args), f'echo "{MARK} sacct rc=$?"']
     return "; ".join(parts)
@@ -402,6 +408,7 @@ def parse_squeue(output: str, cluster: str, now: float | None = None) -> list[Jo
                 submit_time=_clean_time(rec["submit_time"]),
                 start_time=_clean_time(rec["start_time"]),
                 work_dir=rec["work_dir"].strip(),
+                gpus=gpus_from_gres(rec.get("gres", "")) * max(1, _int(rec["nodes"])),
                 source="squeue",
                 last_seen=now,
             )
@@ -449,6 +456,7 @@ def parse_sacct(output: str, cluster: str, now: float | None = None) -> list[Job
                 start_time=_clean_time(rec["Start"]),
                 end_time=_clean_time(rec["End"]),
                 work_dir=rec["WorkDir"].strip(),
+                gpus=gpus_from_tres(rec.get("AllocTRES", "")) or gpus_from_tres(rec.get("ReqTRES", "")),
                 source="sacct",
                 last_seen=now,
             )
@@ -478,6 +486,13 @@ def describe_exit(job: Job) -> str:
     return ""
 
 
+def apply_tres(jobs: list[Job], tres: dict[str, int]) -> None:
+    """Fill in GPUs from the long-format squeue where the short format had none."""
+    for j in jobs:
+        if not j.gpus and tres.get(j.job_id):
+            j.gpus = tres[j.job_id]
+
+
 def merge_jobs(squeue_jobs: list[Job], sacct_jobs: list[Job]) -> list[Job]:
     """Combine both sources for one cluster.
 
@@ -495,6 +510,8 @@ def merge_jobs(squeue_jobs: list[Job], sacct_jobs: list[Job]) -> list[Job]:
                 j.end_time = prev.end_time
             if not j.account:
                 j.account = prev.account
+            if not j.gpus:
+                j.gpus = prev.gpus
         by_id[j.job_id] = j
     return list(by_id.values())
 

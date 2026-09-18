@@ -37,6 +37,15 @@
 
 <section id="clusters" class="clusters" aria-label="Clusters"></section>
 
+<section id="usage" class="projects usage" hidden aria-label="My usage">
+  <div class="proj-bar">
+    <span class="proj-head"><button id="usage-toggle" class="proj-toggle" title="collapse my usage (u)">▾</button>
+      <span class="proj-title usage-title">My usage <span id="usage-status" class="muted"></span></span></span>
+  </div>
+  <div id="usage-cards" class="proj-cards"></div>
+  <div id="usage-compact" class="proj-compact" hidden></div>
+</section>
+
 <section id="projects" class="projects" hidden aria-label="Projects">
   <div class="proj-bar">
     <span class="proj-head"><button id="proj-toggle" class="proj-toggle" title="collapse the project cards (p)">▾</button>
@@ -144,7 +153,7 @@
 
 <footer class="foot">
   <span id="footer-note"></span>
-  <span class="muted">keys: <kbd>/</kbd> search · <kbd>r</kbd> refresh · <kbd>1</kbd>–<kbd>5</kbd> tabs · <kbd>e</kbd> expand arrays · <kbd>p</kbd> projects · <kbd>t</kbd> theme · <kbd>w</kbd> widget · <kbd>l</kbd> cluster load · <kbd>q</kbd> back to jobs · <kbd>Esc</kbd> close</span>
+  <span class="muted">keys: <kbd>/</kbd> search · <kbd>r</kbd> refresh · <kbd>1</kbd>–<kbd>5</kbd> tabs · <kbd>e</kbd> expand arrays · <kbd>u</kbd> my usage · <kbd>p</kbd> projects · <kbd>t</kbd> theme · <kbd>w</kbd> widget · <kbd>l</kbd> cluster load · <kbd>q</kbd> back to jobs · <kbd>Esc</kbd> close</span>
 </footer>
 <script src="/app.js"></script>
 </body>

@@ -44,8 +44,9 @@ omniqueue --demo monitor
 `~/.config/omniqueue/config.toml`:
 
 ```toml
+# mode = "pi"             # "user": your jobs and your usage per project; "pi": also whole projects
 refresh_seconds = 60      # how often every cluster is polled
-lookback_hours  = 72      # how far back sacct is asked for finished jobs
+lookback_hours  = 72      # how far back sacct is asked for finished jobs (the first poll takes history_days)
 history_days    = 30      # finished jobs stay in the local history this long
 ssh_timeout     = 20
 persist_connections = true   # keep one ssh connection per cluster open between polls
@@ -167,7 +168,7 @@ network change that dropped the connection.
 | `omniqueue --demo ...` | run any command against fabricated clusters |
 | `omniqueue --config PATH ...` | use another config file |
 
-Dashboard keys: `/` search, `r` refresh now, `l` cluster load, `q` back to jobs, `e` expand/collapse arrays, `w` side widget, `t` theme, `1`-`5` tabs, `p` collapse/expand the project cards, `x` where to submit (after unlocking, see below), `Esc` close.
+Dashboard keys: `/` search, `r` refresh now, `l` cluster load, `q` back to jobs, `e` expand/collapse arrays, `w` side widget, `t` theme, `1`-`5` tabs, `u` collapse/expand my usage, `p` collapse/expand the project cards, `x` where to submit (after unlocking, see below), `Esc` close.
 
 ## Tab completion
 
@@ -243,7 +244,22 @@ cluster names from your config, `list --state` the job states.
   or collapses every array.
 * Click a row for all details (queue wait, node list, work dir, exit code, ...).
   Finished jobs can be removed from the local history from there.
-* **Project cards** appear below the cluster cards for every project listed in
+* **My usage** sits below the cluster cards: one card per project (Slurm
+  account) you have jobs in, computed from your own job history with no extra
+  cluster access. CPU jobs and GPU jobs are kept apart: *cpu now / cpu 30 d*
+  in cores and core-hours, *gpu now / gpu 30 d* in GPUs and GPU-hours (only on
+  clusters with GPU partitions), a per-day chart with a scale, and quota bars
+  when `project_quotas` / `project_gpu_quotas` are set. A job is a GPU job when
+  Slurm allocated or requested GPUs for it (`AllocTRES`/`ReqTRES` in `sacct`,
+  the gres column and the long-format TRES of `squeue`) or when it runs on a
+  partition listed in `gpu_partitions`; `gpu_hour_factor` converts Slurm GPU
+  units into billed GPU-hours (LUMI-G: 0.5). The first poll of a fresh install
+  asks `sacct` for the whole `history_days` window once, so the 30-day figures
+  are complete from the start; afterwards finished jobs stay in the local
+  history. The ▾ (or `u`) collapses the row to one pill per project.
+* **GPUs on your jobs** show as a small tag next to the node count and in the
+  job details.
+* **Project cards** (mode `pi` only) appear below for every project listed in
   the config: see [Projects](#projects-who-runs-how-much) below. The ▾ at the
   left of the row (or `p`) collapses them to one pill per project with the
   running jobs and the 30-day usage; the choice is remembered.
@@ -285,9 +301,26 @@ window is behind others. Query parameters tune it:
 `/widget?refresh=300&alerts=24&n=8` re-reads every 5 min, alerts on the last
 24 h and lists 8 jobs per section.
 
+## Two modes, two branches
+
+`mode = "user"` shows your own jobs and *your* usage per project. `mode = "pi"`
+adds the project-wide parts below: the slow poll of whole projects, their
+cards, the project queue view and the experimental predictor. The code is the
+same; only the default differs between the two branches of the repository:
+
+| branch | default mode | for |
+|---|---|---|
+| `USER-version` | `user` | one person watching their own jobs and usage |
+| `PI-version` | `pi` | a PI or project manager who also watches whole projects |
+
+Either default can be overridden with `mode = ...` in the config. Fixes land on
+the trunk and are merged into both branches; the branches differ by one line
+(`DEFAULT_MODE` in `config.py`).
+
 ## Projects: who runs how much
 
-List the Slurm accounts you share in a cluster entry (`projects = [...]`) and
+Watching whole projects needs `mode = "pi"` (the default on the `PI-version`
+branch). List the Slurm accounts you share in a cluster entry (`projects = [...]`) and
 OmniQueue watches the *whole* project, every user, on a much slower timescale
 than your own jobs: every 2 hours by default (`project_refresh_seconds`,
 overridable per cluster). One card per project sits under the cluster cards:
@@ -471,8 +504,9 @@ as possible and to fail closed. Before pointing it at real clusters:
 Per poll and per cluster, OmniQueue runs one remote shell command:
 
 ```
-squeue --noheader --array --user="$USER" --format='%i|%T|...|%j'; echo "@@OMNIQUEUE squeue rc=$?"; \
-sacct  --noheader --parsable2 --allocations --user="$USER" --starttime=<now - lookback> --format=JobID,State,...,JobName; echo "@@OMNIQUEUE sacct rc=$?"
+squeue --noheader --array --user="$USER" --format='%i|%T|...|%b|%j'; echo "@@OMNIQUEUE squeue rc=$?"; \
+squeue --noheader --user="$USER" --Format='JobID:60|,NumNodes:12|,tres-alloc:400|,...'; echo "@@OMNIQUEUE squeue_tres rc=$?"; \
+sacct  --noheader --parsable2 --allocations --user="$USER" --starttime=<now - lookback> --format=JobID,State,...,AllocTRES,ReqTRES,JobName; echo "@@OMNIQUEUE sacct rc=$?"
 ```
 
 The cluster load view, only when you ask for it, runs separately:
