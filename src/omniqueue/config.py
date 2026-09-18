@@ -41,6 +41,7 @@ class ClusterConfig:
     projects: list[str] = field(default_factory=list)  # Slurm accounts whose usage (all users) is tracked
     project_quotas: dict[str, float] = field(default_factory=dict)  # project -> core-hours per 30 days (optional)
     project_gpu_quotas: dict[str, float] = field(default_factory=dict)  # project -> GPU-hours per 30 days (optional)
+    project_pis: dict[str, str] = field(default_factory=dict)  # project -> PI (or any label) shown next to the project name
     gpu_partitions: list[str] = field(default_factory=list)  # partitions counted as GPU; [] = detect from sinfo gres
     gpu_hour_factor: float = 1.0  # GPU-hours billed per Slurm GPU unit and hour (LUMI-G: 0.5, two units per MI250X)
     project_refresh_seconds: int | None = None  # how often the projects are polled here; None = global default
@@ -152,6 +153,7 @@ host = "tetralith"               # ssh alias
 # projects = ["naiss2025-1-23"]  # Slurm accounts to watch: who runs how much, fairshare, quota (all users)
 # project_quotas = { "naiss2025-1-23" = 100000 }   # core-hours per 30 days, when the site does not publish it via sshare
 # project_gpu_quotas = { "naiss2025-1-23" = 2000 } # GPU-hours per 30 days (GPU jobs are counted separately from CPU jobs)
+# project_pis = { "naiss2025-1-23" = "A. Nilsson" } # PI (or any label) shown next to the project name
 # gpu_partitions = ["gpu"]       # partitions whose jobs count as GPU jobs; default: those sinfo reports GPUs for
 # gpu_hour_factor = 0.5          # GPU-hours billed per Slurm GPU unit: LUMI-G shows 8 units per node for 4 MI250X
                                  # and bills each unit as half a GPU-hour; default 1.0
@@ -279,6 +281,9 @@ def config_from_dict(raw: dict) -> Config:
             for proj, hours in quotas.items():
                 if not isinstance(hours, (int, float)) or hours <= 0:
                     raise ConfigError(f"clusters[{i}] ({c['name']}).{key}[{proj!r}] must be a positive number of {unit}.")
+        pis = c.get("project_pis", {})
+        if not isinstance(pis, dict) or not all(isinstance(v, str) for v in pis.values()):
+            raise ConfigError(f"clusters[{i}] ({c['name']}).project_pis must be a table of project = \"name\".")
         factor = c.get("gpu_hour_factor", 1.0)
         if not isinstance(factor, (int, float)) or factor <= 0:
             raise ConfigError(f"clusters[{i}] ({c['name']}).gpu_hour_factor must be a positive number.")

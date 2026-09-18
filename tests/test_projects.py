@@ -251,6 +251,7 @@ class PollerTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def _poller(self, history_days=90, **kw):
+        kw.setdefault("project_pis", {"proj-a": "Prof. X"})
         cfg = Config(clusters=[ClusterConfig(name="here", host="local", projects=["proj-a"], **kw)],
                      data_dir=Path(self.tmp.name), persist_connections=False, project_refresh_seconds=3600,
                      project_history_days=history_days, project_backfill_days=7)
@@ -274,6 +275,7 @@ class PollerTests(unittest.TestCase):
         proj = snap["projects"][0]
         self.assertEqual(proj["project"], "proj-a")
         self.assertEqual(proj["me"], "alice")
+        self.assertEqual(proj["pi"], "Prof. X")
         self.assertEqual(proj["running"]["cpu"]["jobs"], 1)
         self.assertEqual(proj["running"]["gpu"]["jobs"], 1)
         self.assertEqual(proj["quota"]["limit_h"], 5000)
@@ -381,6 +383,9 @@ class ConfigTests(unittest.TestCase):
             config_from_dict({"project_refresh_seconds": 10, "clusters": [{"name": "a", "host": "a"}]})
         with self.assertRaises(ConfigError):
             config_from_dict({"clusters": [{"name": "a", "host": "a", "gpu_hour_factor": 0}]})
+        with self.assertRaises(ConfigError):
+            config_from_dict({"clusters": [{"name": "a", "host": "a", "project_pis": {"p": 3}}]})
+        self.assertEqual(config_from_dict({"clusters": [{"name": "a", "host": "a", "project_pis": {"p": "X"}}]}).clusters[0].project_pis, {"p": "X"})
         self.assertEqual(config_from_dict({"clusters": [{"name": "a", "host": "a", "gpu_hour_factor": 0.5}]}).clusters[0].gpu_hour_factor, 0.5)
 
 

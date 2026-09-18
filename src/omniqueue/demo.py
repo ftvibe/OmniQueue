@@ -183,7 +183,8 @@ def demo_config() -> Config:
         logo_dir=logo_dir,
         clusters=[
             ClusterConfig(name="tetralith", host="tetralith.nsc.liu.se", color="#5f9e99", projects=["naiss2025-1-42", "naiss2025-22-8"],
-                          project_quotas={"naiss2025-1-42": 120000}, nice=0),
+                          project_quotas={"naiss2025-1-42": 120000}, nice=0,
+                          project_pis={"naiss2025-1-42": "A. Nilsson", "naiss2025-22-8": "B. Ek"}),
             ClusterConfig(name="dardel", host="dardel.pdc.kth.se", color="#e2856c", load_partitions=["main", "gpu"],
                           projects=["naiss2025-3-7"], project_refresh_seconds=3600, nice=2000),
             ClusterConfig(name="lumi", host="lumi.csc.fi", color="#b39a4b", projects=["project_465000123"],

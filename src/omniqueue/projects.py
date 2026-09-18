@@ -800,6 +800,7 @@ class ProjectPoller:
                                        quota_gpu_h=c.project_gpu_quotas.get(proj), gpu_partitions=c.gpu_partitions,
                                        gpu_factor=c.gpu_hour_factor)
                 s["color"] = st["color"]
+                s["pi"] = c.project_pis.get(proj)
                 s["error"] = st["error"]
                 s["error_kind"] = st["error_kind"]
                 s["warning"] = st["warning"]

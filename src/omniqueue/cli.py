@@ -325,7 +325,7 @@ def cmd_projects(args) -> int:
     snap = poller.snapshot()
     for p in snap["projects"]:
         upd = time.strftime("%Y-%m-%d %H:%M", time.localtime(p["updated"])) if p["updated"] else "never"
-        head = f"== {p['cluster']} / {p['project']}  (updated {upd}, every {p['refresh_seconds'] / 3600:g} h"
+        head = f"== {p['cluster']} / {p['project']}" + (f" ({p['pi']})" if p.get("pi") else "") + f"  (updated {upd}, every {p['refresh_seconds'] / 3600:g} h"
         if p.get("coverage_days") is not None:
             head += f", {p['coverage_days']:.0f} d of history" + (" so far" if p.get("backfill_pending") else "")
         head += ")"

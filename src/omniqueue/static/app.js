@@ -745,10 +745,11 @@
     card.append(el("div", { class: "pcard-head" },
       el("span", { class: "w-cpill", style: `background:${color};color:#fff` }, p.cluster),
       el("b", {}, p.project),
-      el("small", { class: "muted", title: `queue as of ${p.updated ? clock(p.updated) : "–"}; the full poll (accounting, fairshare, load) runs every ${fmtEvery(p.refresh_seconds)} in the background, next ${p.next_poll ? clock(p.next_poll).slice(0, 5) : "–"}` },
-        `${updated} · every ${fmtEvery(p.refresh_seconds)}${cover}`),
+      p.pi ? el("span", { class: "ppi", title: "PI, from project_pis in the config" }, p.pi) : null,
       el("button", { class: `qrefresh ${p.queue_fetching ? "spin" : ""}`, title: "re-read this cluster's project queue now (squeue only, no accounting)",
-        onclick: (e) => { e.stopPropagation(); refreshQueue(p.cluster); } }, "↻")));
+        onclick: (e) => { e.stopPropagation(); refreshQueue(p.cluster); } }, "↻"),
+      el("small", { class: "muted", title: `queue as of ${p.updated ? clock(p.updated) : "–"}; the full poll (accounting, fairshare, load) runs every ${fmtEvery(p.refresh_seconds)} in the background, next ${p.next_poll ? clock(p.next_poll).slice(0, 5) : "–"}` },
+        `${updated} · every ${fmtEvery(p.refresh_seconds)}${cover}`)));
     if (p.error && !p.updated) {
       const kind = p.error_kind || "";
       card.append(el("div", { class: `card-error ${kind}` }, el("span", { class: "warn-icon" }, kind === "login" ? "○" : "⚠"),
@@ -783,8 +784,12 @@
     // daily chart(s), stacked by user: core-hours, and GPU-hours when the project has any
     const daily = p.daily || [];
     const dailyChart = (key, usersKey, unit) => {
-      const max = Math.max(1, ...daily.map((d) => d[key]));
-      const chart = el("div", { class: `pdaily ${key === "gpu_h" ? "gpu" : ""}`, title: `${unit} per day, last 30 days` });
+      const peak = Math.max(...daily.map((d) => d[key]), 0);
+      const max = Math.max(1, peak);
+      const chart = el("div", { class: `pdaily ${key === "gpu_h" ? "gpu" : ""}`, title: `${unit} per day, last 30 days; the top line is the busiest day (${Math.round(peak).toLocaleString("en")} ${unit}), the faint line half of it` });
+      // y scale: the peak day at the top, half of it as a faint midline
+      chart.append(el("span", { class: "pscale peak" }, peak > 0 ? el("b", {}, `${fmtCoreH(peak)} ${unit}`) : null),
+                   el("span", { class: "pscale half" }, peak > 0 ? el("b", {}, fmtCoreH(peak / 2)) : null));
       for (const d of daily) {
         const col = el("div", { class: "pday", title: `${d.date}: ${Math.round(d[key]).toLocaleString("en").replace(/,/g, " ")} ${unit}` });
         for (const u of users) {
@@ -839,7 +844,7 @@
     if (!p) { title.textContent = "project not found"; $("#project-jobs tbody").replaceChildren(); return; }
     const color = p.color || clusterColor(p.cluster);
     const rc = p.running.cpu, rg = p.running.gpu, qc = p.pending.cpu, qg = p.pending.gpu;
-    title.replaceChildren(el("span", { class: "w-cpill", style: `background:${color};color:#fff` }, p.cluster), el("b", {}, p.project),
+    title.replaceChildren(el("span", { class: "w-cpill", style: `background:${color};color:#fff` }, p.cluster), el("b", {}, p.project), p.pi ? el("span", { class: "ppi" }, p.pi) : null,
       el("span", { class: "muted" }, ` · ${plural(rc.jobs + rg.jobs, "job")} running, ${fmtInt(qc.jobs + qg.jobs)} waiting`
         + (p.has_gpu ? ` · ${fmtInt(Math.round(rc.cores))} cores and ${fmtInt(Math.round(rg.gpus))} GPUs in use` + (p.gpu_factor !== 1 ? ` (Slurm units; billed x ${p.gpu_factor})` : "") : ` · ${fmtInt(Math.round(rc.cores))} cores in use`)));
     $("#project-note").textContent = p.queue_error ? `queue refresh failed: ${p.queue_error}`
@@ -904,7 +909,7 @@
         const text = p.error && !p.updated ? "no data"
           : `${plural(p.running.cpu.jobs + p.running.gpu.jobs, "job")} running · ${fmtCoreH(u30.cpu.core_h)} core-h` + (p.has_gpu ? ` · ${fmtCoreH(u30.gpu.gpu_h)} GPU-h` : "") + " / 30 d";
         return el("span", { class: `pmini ${p.error && !p.updated ? "err" : ""}`, style: `--card-color:${color}`, title: `${p.cluster} · ${p.project}: ${p.error || text} (click to expand)`, onclick: toggleProjects },
-          el("span", { class: "w-cpill", style: `background:${color};color:#fff` }, p.cluster), el("b", {}, p.project), el("span", { class: "muted" }, text));
+          el("span", { class: "w-cpill", style: `background:${color};color:#fff` }, p.cluster), el("b", {}, p.project), p.pi ? el("span", { class: "ppi" }, p.pi) : null, el("span", { class: "muted" }, text));
       }));
     } else {
       $("#proj-cards").replaceChildren(...pr.projects.map(projectCard));

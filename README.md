@@ -74,6 +74,7 @@ host = "tetralith"          # anything ssh accepts, aliases from ~/.ssh/config i
 # projects = ["naiss2025-1-23"]                    # watch these Slurm accounts: who runs how much (all users)
 # project_quotas = { "naiss2025-1-23" = 100000 }  # core-hours per 30 days, if sshare does not publish a limit
 # project_gpu_quotas = { "naiss2025-1-23" = 2000 } # GPU-hours per 30 days; GPU jobs are kept apart from CPU jobs
+# project_pis = { "naiss2025-1-23" = "A. Nilsson" }   # PI (or any label) shown next to the project name
 # gpu_partitions = ["gpu"]                         # which partitions are GPU ones; default: those sinfo reports GPUs for
 # gpu_hour_factor = 0.5                            # GPU-hours per Slurm GPU unit and hour (LUMI-G: 8 units per node for 4 MI250X)
 # project_refresh_seconds = 3600                  # poll this cluster's projects hourly instead of the global 2 h
@@ -315,6 +316,10 @@ overridable per cluster). One card per project sits under the cluster cards:
   back-fill chunks, to add the GPU counts;
 * the user legend with each person's 30-day core-hours and, where they have
   any, GPU-hours (you are marked);
+* a PI name (or any label) next to the project name when `project_pis` maps
+  the project to one;
+* the small chart of core-hours per day carries a scale: a line at the busiest
+  day with its value, and a faint dashed line at half of it;
 * the project's **fairshare** factor (and yours), from `sshare`;
 * a **quota bar** when a limit is known: `project_quotas` in the config
   (core-hours per rolling 30 days) or, without it, the group limit some sites
