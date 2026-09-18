@@ -133,7 +133,7 @@ class ProjectStore:
 
     def _note_companions(self, cluster: str, accounts: dict[str, str], *row_lists: list[dict]) -> list[str]:
         """Remember which companion accounts Slurm actually knows (a row came back for them),
-        so the card names only accounts that exist.  Returns the ones seen for the first time.
+        so the card names only accounts that exist.  Returns the ones noted for the first time.
         Call with the lock held."""
         seen = self.data["meta"].setdefault("companions", {}).setdefault(cluster, {})
         new: list[str] = []
@@ -155,6 +155,11 @@ class ProjectStore:
             queue = self.data["queue"].setdefault(cluster, {})
             shares = self.data["shares"].setdefault(cluster, {})
             seen = self.data["meta"].setdefault("companions", {}).setdefault(cluster, {})
+            # accounts whose older history the back-fill has covered: before this field existed,
+            # exactly the accounts that were watched as projects (their keys in the store)
+            history = self.data["meta"].setdefault("history", {}).setdefault(cluster, [])
+            if not history and self.data["meta"]["last_poll"].get(cluster) is not None:
+                history.extend(sorted(set(jobs) | set(queue) | set(shares)))
             for acc, proj in accounts.items():
                 if acc == proj or not (acc in jobs or acc in queue or acc in shares):
                     continue
@@ -214,14 +219,20 @@ class ProjectStore:
         projects = list(dict.fromkeys(accounts.values()))
         with self._lock:
             self._learn_gpu_partitions(cluster, sacct_rows + queue_rows)
-            fresh = self._note_companions(cluster, accounts, sacct_rows, queue_rows, sshare_rows)
-            if fresh and window_start is not None:
-                # a companion Slurm knows but this store has never fetched: its older jobs are
-                # missing, so the back-fill runs again from this poll's window backwards
-                oldest = self.data["meta"].setdefault("oldest", {})
-                if oldest.get(cluster) is not None and oldest[cluster] < window_start:
-                    oldest[cluster] = window_start
-                    log.info("%s: %s joined the projects; fetching the older history again", cluster, ", ".join(fresh))
+            self._note_companions(cluster, accounts, sacct_rows, queue_rows, sshare_rows)
+            history = self.data["meta"].setdefault("history", {}).setdefault(cluster, [])
+            if window_start is not None:
+                answered = {r.get("account") for rows in (sacct_rows, queue_rows, sshare_rows) for r in rows} & set(accounts)
+                fresh = sorted(a for a in answered if a not in history)  # Slurm knows them, the store never fetched them
+                first = self.data["meta"]["oldest"].get(cluster) is None if "oldest" in self.data["meta"] else True
+                if fresh and not first:
+                    # their older jobs are missing: the back-fill runs again from this poll's window backwards
+                    oldest = self.data["meta"].setdefault("oldest", {})
+                    if oldest[cluster] < window_start:
+                        oldest[cluster] = window_start
+                        log.info("%s: %s joined the projects; fetching the older history again", cluster, ", ".join(fresh))
+                history.extend(a for a in fresh)
+                history.extend(p for p in projects if p not in history)  # the projects themselves, from the first poll on
             jobs = self.data["jobs"].setdefault(cluster, {})
             for row in sacct_rows:
                 proj = accounts.get(row.get("account") or "")
@@ -591,6 +602,8 @@ class ProjectStore:
             "running": running, "pending": pending, "usage": usage, "daily": daily, "shares": shares,
             "quota": quota, "gpu_quota": gpu_quota, "has_gpu": has_gpu, "gpu_partitions": sorted(gpu_parts),
             "accounts": [project] + ([companion] if companion else []), "gpu_account": companion,
+            "accounts_asked": list(accounts or [project]),
+            "history_accounts": [a for a in (accounts or [project]) if a in self.data["meta"].get("history", {}).get(cluster, [])],
             "gpu_factor": gpu_factor, "by_partition": by_partition,
             "users": users, "me": me, "jobs_known": len(jobs), "oldest": oldest,
             "jobs_now": sorted(jobs_now, key=lambda r: (r["category"] != "running", -(r.get("elapsed_s") or 0), r["job_id"])),

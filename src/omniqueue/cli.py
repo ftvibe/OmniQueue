@@ -440,6 +440,10 @@ def cmd_projects(args) -> int:
         print(f"   total 30 d: {tot['cpu']['core_h']:,.0f} core-h in {tot['cpu']['jobs']} CPU jobs"
               + (f" · {tot['gpu']['gpu_h']:,.0f} GPU-h in {tot['gpu']['jobs']} GPU jobs" if p["has_gpu"] else ""))
         if args.partitions:
+            asked = p.get("accounts_asked") or [p["project"]]
+            companion = p.get("gpu_account")
+            print(f"   accounts asked for: {', '.join(asked)} · companion account seen by Slurm: "
+                  + (companion if companion else "none") + f" · history fetched for: {', '.join(p.get('history_accounts') or []) or 'nothing yet'}")
             print(f"   GPU partitions seen as such: {p['gpu_partitions'] or 'none'}")
             print(f"   {'PARTITION':<16} {'KIND':<4} {'JOBS':>6} {'W/ GPUS':>7} {'GPUs/node':>9} {'core-h 30 d':>12} {'GPU-h 30 d':>11}")
             for part, b in sorted(p["by_partition"].items(), key=lambda kv: -kv[1]["core_h"]):
