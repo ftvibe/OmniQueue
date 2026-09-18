@@ -469,6 +469,22 @@ class ProjectStore:
         gpu_quota = make_quota(quota_gpu_h, usage["30"]["gpu"]["gpu_h"], "config", "30 d") if quota_gpu_h else \
             make_quota((grp_mins.get("gres/gpu") or 0) / 60, (grp_raw.get("gres/gpu") or 0) / 60, "sshare", "allocation")
 
+        # per-partition breakdown (30 d): what the jobs carry and how each partition is classified
+        by_partition: dict[str, dict] = {}
+        w0 = now - 30 * 86400
+        for rec, (s0, e0) in intervals:
+            if min(e0, now) <= w0:
+                continue
+            part = rec.get("partition") or "?"
+            b = by_partition.setdefault(part, {"jobs": 0, "kind": kind_of(rec), "with_gpus": 0, "core_h": 0.0, "gpu_h": 0.0,
+                                                "gpus_per_node": gpn.get(part, 0)})
+            overlap = max(0.0, min(e0, now) - max(s0, w0))
+            b["jobs"] += 1
+            b["with_gpus"] += 1 if (rec.get("gpus") or 0) > 0 else 0
+            b["core_h"] += overlap * cores_of(rec) / 3600
+            if b["kind"] == "gpu":
+                b["gpu_h"] += overlap * gpus_of(rec) / 3600
+
         u30 = usage["30"]
         weight = {}
         for u, v in u30["cpu"]["users"].items():
@@ -486,7 +502,7 @@ class ProjectStore:
             "cluster": cluster, "project": project, "updated": (q or {}).get("ts") or self.last_poll(cluster),
             "running": running, "pending": pending, "usage": usage, "daily": daily, "shares": shares,
             "quota": quota, "gpu_quota": gpu_quota, "has_gpu": has_gpu, "gpu_partitions": sorted(gpu_parts),
-            "gpu_factor": gpu_factor,
+            "gpu_factor": gpu_factor, "by_partition": by_partition,
             "users": users, "me": me, "jobs_known": len(jobs), "oldest": oldest,
             "jobs_now": sorted(jobs_now, key=lambda r: (r["category"] != "running", -(r.get("elapsed_s") or 0), r["job_id"])),
         }

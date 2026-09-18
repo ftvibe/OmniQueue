@@ -370,7 +370,13 @@ def cmd_projects(args) -> int:
             print(line + mark)
         tot = p["usage"]["30"]
         print(f"   total 30 d: {tot['cpu']['core_h']:,.0f} core-h in {tot['cpu']['jobs']} CPU jobs"
-              + (f" · {tot['gpu']['gpu_h']:,.0f} GPU-h in {tot['gpu']['jobs']} GPU jobs" if p["has_gpu"] else "") + "\n")
+              + (f" · {tot['gpu']['gpu_h']:,.0f} GPU-h in {tot['gpu']['jobs']} GPU jobs" if p["has_gpu"] else ""))
+        if args.partitions:
+            print(f"   GPU partitions seen as such: {p['gpu_partitions'] or 'none'}")
+            print(f"   {'PARTITION':<16} {'KIND':<4} {'JOBS':>6} {'W/ GPUS':>7} {'GPUs/node':>9} {'core-h 30 d':>12} {'GPU-h 30 d':>11}")
+            for part, b in sorted(p["by_partition"].items(), key=lambda kv: -kv[1]["core_h"]):
+                print(f"   {part:<16} {b['kind']:<4} {b['jobs']:>6} {b['with_gpus']:>7} {b['gpus_per_node']:>9} {b['core_h']:>12,.0f} {b['gpu_h']:>11,.1f}")
+        print()
     return 0
 
 
@@ -484,6 +490,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("projects", help="show who runs how much in your projects (from the slow background poll)")
     s.add_argument("--poll", action="store_true", help="poll the clusters now instead of showing the stored data")
+    s.add_argument("--partitions", action="store_true", help="per partition: jobs, GPU classification, core-h and GPU-h (30 d)")
     s.set_defaults(func=cmd_projects)
 
     s = sub.add_parser("usage", help="your own usage per project from the stored history; --jobs shows how each job was classified")

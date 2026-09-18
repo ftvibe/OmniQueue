@@ -50,7 +50,7 @@ _omniqueue() {
         COMPREPLY=( $(compgen -W "--state" -- "$cur") )
       fi ;;
     monitor) COMPREPLY=( $(compgen -W "dashboard widget --port --host --no-open --plain" -- "$cur") ) ;;
-    projects) COMPREPLY=( $(compgen -W "--poll" -- "$cur") ) ;;
+    projects) COMPREPLY=( $(compgen -W "--poll --partitions" -- "$cur") ) ;;
     usage) COMPREPLY=( $(compgen -W "--jobs $(omniqueue $cfg _clusters 2>/dev/null)" -- "$cur") ) ;;
     predict)
       case "$prev" in
@@ -90,7 +90,7 @@ _omniqueue() {
         logout) _arguments "*:cluster:($clusters)" ;;
         list)   _arguments '*'{-s,--state}'[only these states]:state:(__STATES__)' ;;
         monitor) _arguments '--port[listen port]:port' '--host[listen host]:host' '--no-open[do not open a browser]' '--plain[widget: normal tab instead of a Safari window]' '1:view:(dashboard widget)' ;;
-        projects) _arguments '--poll[poll the clusters now]' ;;
+        projects) _arguments '--poll[poll the clusters now]' '--partitions[per-partition breakdown]' ;;
         usage) _arguments '--jobs[list every stored job with its classification]' "*:cluster:($clusters)" ;;
         predict) _arguments '(-N --nodes)'{-N,--nodes}'[nodes]:nodes' '(-t --hours)'{-t,--hours}'[wall time in hours]:hours' '(-n --cores)'{-n,--cores}'[total cores]:cores' '(-G --gpus)'{-G,--gpus}'[GPUs per node]:gpus' '*'{-A,--project}'[project]:project' '*'{-M,--cluster}"[cluster]:cluster:($clusters)" '*'{-p,--partition}'[partition]:partition' ;;
         serve)   _arguments '--port[listen port]:port' '--host[listen host]:host' '--open[open the dashboard]' ;;
@@ -121,6 +121,7 @@ complete -c omniqueue -n '__fish_seen_subcommand_from monitor' -a 'dashboard wid
 complete -c omniqueue -n '__fish_seen_subcommand_from monitor' -l plain -d 'widget: normal tab instead of a Safari window'
 complete -c omniqueue -n '__fish_seen_subcommand_from serve' -l open -d 'open the dashboard'
 complete -c omniqueue -n '__fish_seen_subcommand_from projects' -l poll -d 'poll the clusters now'
+complete -c omniqueue -n '__fish_seen_subcommand_from projects' -l partitions -d 'per-partition breakdown'
 complete -c omniqueue -n '__fish_seen_subcommand_from usage' -l jobs -d 'list every stored job with its classification'
 complete -c omniqueue -n '__fish_seen_subcommand_from usage' -a '(omniqueue _clusters 2>/dev/null)' -d cluster
 complete -c omniqueue -n '__fish_seen_subcommand_from predict' -s N -l nodes -x -d 'nodes'

@@ -162,6 +162,12 @@ class StoreTests(unittest.TestCase):
             self.assertEqual(s["jobs_now"][1]["gpus"], 2)
             self.assertEqual(s["jobs_now"][4]["gpus"], 1)
             self.assertEqual(s["jobs_now"][0]["name"], "vasp-relax")
+            bp = s["by_partition"]
+            self.assertEqual(bp["main"]["kind"], "cpu")
+            self.assertEqual(bp["gpu"]["kind"], "gpu")
+            self.assertEqual(bp["gpu"]["jobs"], 2)
+            self.assertEqual(bp["gpu"]["with_gpus"], 2)
+            self.assertEqual(bp["gpu"]["gpus_per_node"], 4)
             # a configured node size makes a partition a GPU partition and sizes whole-node jobs there
             w = store.summary("c1", "proj-a", NOW, gpus_per_node={"main": 4})
             self.assertIn("main", w["gpu_partitions"])
