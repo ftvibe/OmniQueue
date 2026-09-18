@@ -240,3 +240,37 @@ class HostHeaderTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             tmp.cleanup()
+
+
+class AccessTokenTests(unittest.TestCase):
+    def test_token_cookie_and_next(self):
+        import http.cookiejar
+        import urllib.error
+        tmp = tempfile.TemporaryDirectory()
+        cfg = demo_config(mode="pi")
+        server = make_server(DemoCollector(cfg, HistoryStore(Path(tmp.name) / "h.json")), "127.0.0.1", 0, access_token="s3cret-s3cret-s3cret")
+        port = server.server_address[1]
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            with self.assertRaises(urllib.error.HTTPError) as ctx:  # no cookie: refused
+                urllib.request.urlopen(f"http://127.0.0.1:{port}/api/state")
+            self.assertEqual(ctx.exception.code, 401)
+            jar = http.cookiejar.CookieJar()
+            opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+            with opener.open(f"http://127.0.0.1:{port}/?token=s3cret-s3cret-s3cret&next=/widget") as r:
+                self.assertEqual(r.status, 200)
+                self.assertTrue(r.geturl().endswith("/widget"))  # followed the redirect to the widget
+            cookie = next(c for c in jar if c.name == "omniqueue_access")
+            self.assertIsNotNone(cookie.expires)  # kept, not a session cookie
+            with opener.open(f"http://127.0.0.1:{port}/api/state") as r:
+                self.assertEqual(r.status, 200)
+            # a wrong token sets nothing; an off-site `next` is ignored
+            with self.assertRaises(urllib.error.HTTPError):
+                urllib.request.urlopen(f"http://127.0.0.1:{port}/?token=wrong")
+            plain = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+            with plain.open(f"http://127.0.0.1:{port}/?token=s3cret-s3cret-s3cret&next=//evil.example/") as r:
+                self.assertTrue(r.geturl().endswith(f":{port}/"))
+        finally:
+            server.shutdown()
+            server.server_close()
+            tmp.cleanup()

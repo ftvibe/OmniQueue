@@ -83,11 +83,17 @@ class Handler(BaseHTTPRequestHandler):
         return morsel is not None and hmac.compare_digest(morsel.value, self.access_token)
 
     def _try_token_login(self, url) -> bool:
-        token = parse_qs(url.query).get("token", [None])[0]
+        """`/?token=...` sets the access cookie (kept for 30 days) and redirects to `/`, or to
+        the local path given as `next` (`/widget`), so a printed link opens the right view."""
+        query = parse_qs(url.query)
+        token = query.get("token", [None])[0]
         if not token or not self.access_token or not hmac.compare_digest(token, self.access_token):
             return False
+        nxt = query.get("next", ["/"])[0]
+        if not nxt.startswith("/") or nxt.startswith("//") or "\\" in nxt:  # same-site paths only
+            nxt = "/"
         self._send(HTTPStatus.SEE_OTHER, b"", "text/plain",
-                   {"Location": "/", "Set-Cookie": f"{COOKIE}={self.access_token}; Path=/; HttpOnly; SameSite=Strict"})
+                   {"Location": nxt, "Set-Cookie": f"{COOKIE}={self.access_token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000"})
         return True
 
     def _csrf_ok(self) -> bool:

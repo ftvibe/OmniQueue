@@ -536,10 +536,18 @@ as possible and to fail closed. Before pointing it at real clusters:
   Content-Security-Policy and `nosniff`/`DENY` headers, and no inline scripts
   are used.
 * **On a shared machine, set a token even locally.** Anyone with a shell on the
-  same computer can open `http://127.0.0.1:8765`. An `access_token` in the
-  config is honoured on loopback too: every request then needs the cookie,
-  `omniqueue monitor` opens the browser with `/?token=...` once to set it, and
-  the widget is opened from that page. Keep the token out of shell history.
+  same computer can open `http://127.0.0.1:8765`. Put
+
+  ```toml
+  access_token = "a-long-random-secret"     # 16+ characters, e.g. from: openssl rand -hex 16
+  ```
+
+  in the config and it is picked up automatically: the server refuses every
+  request that lacks the matching cookie, and `omniqueue monitor` opens the
+  browser at `/?token=...` (with `&next=/widget` for the widget), which sets the
+  cookie for 30 days and redirects to the view, so the token leaves the address
+  bar at once. From another browser or after clearing cookies, open the link
+  `omniqueue monitor` prints once more. Nothing else changes.
 
 ## How data is gathered
 

@@ -145,12 +145,13 @@ def cmd_serve(args) -> int:
     if projects:
         projects.start()
     server = make_server(collector, cfg.listen_host, cfg.listen_port, cfg.access_token, projects)
-    url = f"http://{cfg.listen_host}:{server.server_address[1]}/"
+    base = f"http://{cfg.listen_host}:{server.server_address[1]}"
+    widget = getattr(args, "view", "dashboard") == "widget"
     if cfg.access_token:
-        url += f"?token={cfg.access_token}"
-    if getattr(args, "view", "dashboard") == "widget":
-        # the token cookie is set by "/?token=..." and then redirects to "/"; go straight to the widget otherwise
-        url = f"http://{cfg.listen_host}:{server.server_address[1]}/widget" if not cfg.access_token else url
+        # "/?token=..." sets the access cookie once and redirects to the view asked for
+        url = f"{base}/?token={cfg.access_token}" + ("&next=/widget" if widget else "")
+    else:
+        url = f"{base}/widget" if widget else f"{base}/"
     for w in _perm_warnings(cfg, args):
         print(f"warning: {w}")
     names = ", ".join(c.name for c in cfg.enabled_clusters)
@@ -159,8 +160,6 @@ def cmd_serve(args) -> int:
     if projects:
         plist = ", ".join(f"{c.name}: {', '.join(c.projects)} (every {cfg.project_interval(c) / 3600:g} h)" for c in cfg.project_clusters)
         print(f"project usage polled in the background: {plist}")
-    if view == "widget" and cfg.access_token:
-        print("open /widget in that window once the token cookie is set")
     if args.open:
         if getattr(args, "view", "dashboard") == "widget" and not getattr(args, "plain", False):
             def _open():
