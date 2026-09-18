@@ -277,6 +277,27 @@ class PollerTests(unittest.TestCase):
         store = ProjectStore(Path(self.tmp.name) / "p.json")
         return ProjectPoller(cfg, store, collector), store, collector
 
+    def test_gpus_per_node_from_own_poll_when_load_sample_lacks_it(self):
+        # Dardel: accounting shows no gres/gpu, the project poll's load sample predates GPU
+        # tracking (no gpus_per_node), but the own poll's unfiltered sinfo knows gpu = 8/node
+        poller, store, collector = self._poller(gpu_partitions=["gpu"])
+        rows = [{"job_id": "9", "account": "proj-a", "user": "alice", "partition": "gpu", "state": "COMPLETED",
+                 "nodes": 2, "cpus": 128, "cpu_s": 921600, "submit": _t(30), "start": _t(29), "end": _t(27),
+                 "time_limit_s": 14400, "elapsed_s": 7200, "gpus": 0}]
+        store.record_poll("here", ["proj-a"], NOW, rows, [], [], [
+            {"partition": "gpu", "nodes": {"idle": 1, "mixed": 0, "allocated": 1, "unavailable": 0, "total": 2},
+             "cores": {"idle": 64, "total": 128}, "jobs": {"pending": 0, "running": 1}, "pending_nodes": 0}])
+        with mock.patch("time.time", return_value=NOW):
+            zero = poller.snapshot()["projects"][0]
+            self.assertEqual(zero["usage"]["30"]["gpu"]["jobs"], 1)
+            self.assertEqual(zero["usage"]["30"]["gpu"]["gpu_h"], 0)  # nothing knows the node size yet
+            collector.history.set_partition_gres("here", {"gpu": 8, "main": 0})
+            poller.version += 1
+            fixed = poller.snapshot()["projects"][0]
+        self.assertEqual(fixed["usage"]["30"]["gpu"]["gpu_h"], 2 * 8 * 2)  # 2 nodes x 8 GPUs x 2 h
+        self.assertEqual(fixed["usage"]["30"]["cpu"]["jobs"], 0)
+        self.assertEqual(poller.gpus_per_node(poller.config.clusters[0]), {"gpu": 8})
+
     def test_poll_and_snapshot(self):
         poller, store, _ = self._poller(project_quotas={"proj-a": 5000})
         self.assertEqual([c.name for c in poller.due(time.time() + 10)], ["here"])

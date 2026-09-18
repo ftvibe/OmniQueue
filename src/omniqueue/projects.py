@@ -802,6 +802,15 @@ class ProjectPoller:
     def me(self, cluster: ClusterConfig) -> str:
         return cluster.user or _local_user()
 
+    def gpus_per_node(self, cluster: ClusterConfig) -> dict[str, int]:
+        """GPUs per node per partition for the project cards: the unfiltered sinfo gres your
+        own poll stores (so a load sample taken before GPUs were tracked, or a poll that has
+        not rerun yet, cannot zero the GPU-hours), overridden by the configured sizes."""
+        history = getattr(self.collector, "history", None)
+        out = {p: n for p, n in (history.partition_gres(cluster.name) if history else {}).items() if n > 0}
+        out.update(cluster.gpus_per_node)
+        return out
+
     def etag(self) -> str:
         return f'"p{self.version}"'
 
@@ -825,7 +834,7 @@ class ProjectPoller:
             for proj in c.projects:
                 s = self.store.summary(c.name, proj, now, me=self.me(c), quota_core_h=c.project_quotas.get(proj),
                                        quota_gpu_h=c.project_gpu_quotas.get(proj), gpu_partitions=c.gpu_partitions,
-                                       gpu_factor=c.gpu_hour_factor, gpus_per_node=c.gpus_per_node)
+                                       gpu_factor=c.gpu_hour_factor, gpus_per_node=self.gpus_per_node(c))
                 s["color"] = st["color"]
                 s["pi"] = c.project_pis.get(proj)
                 s["error"] = st["error"]
@@ -854,6 +863,7 @@ class ProjectPoller:
             if not samples and not c.projects:
                 continue
             partitions = {}
+            gpn = self.gpus_per_node(c)
             for part, ss in samples.items():
                 if not ss or (c.load_partitions and part not in c.load_partitions):
                     continue
@@ -861,8 +871,8 @@ class ProjectPoller:
                 partitions[part] = {
                     "samples": ss, "time_limit_s": last.get("time_limit_s"), "total_nodes": last.get("total"),
                     "cores_per_node": (last.get("cpus_per_node") or 0) // max(1, last.get("tpc") or 1),
-                    "gpus_per_node": c.gpus_per_node.get(part) or last.get("gpus_per_node") or 0,
-                    "gpu": part in self.store.gpu_partitions(c.name, list(c.gpu_partitions) + list(c.gpus_per_node)),
+                    "gpus_per_node": gpn.get(part) or last.get("gpus_per_node") or 0,
+                    "gpu": part in self.store.gpu_partitions(c.name, list(c.gpu_partitions) + list(gpn)),
                     "typical_hours": self.store.typical_hours(c.name, part),
                 }
             me = self.me(c)
@@ -870,7 +880,7 @@ class ProjectPoller:
             for proj in c.projects:
                 summ = self.store.summary(c.name, proj, now, me=me, quota_core_h=c.project_quotas.get(proj),
                                           quota_gpu_h=c.project_gpu_quotas.get(proj), gpu_partitions=c.gpu_partitions,
-                                          gpu_factor=c.gpu_hour_factor, gpus_per_node=c.gpus_per_node)
+                                          gpu_factor=c.gpu_hour_factor, gpus_per_node=self.gpus_per_node(c))
                 sh = summ.get("shares") or {}
                 projs[proj] = {
                     "fairshare_me": (sh.get("users", {}).get(me) or {}).get("fairshare"),

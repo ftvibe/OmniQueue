@@ -259,7 +259,9 @@ cluster names from your config, `list --state` the job states.
   reports GPUs for (asked on the first poll and every 6 hours, remembered in
   the history file) plus the `gpu_partitions` list; a whole-node job on such a
   partition that never asked for a gres, as on Dardel, counts as nodes x GPUs
-  per node. Where `sinfo` reports no gres at all, `gpus_per_node = { gpu = 4 }`
+  per node. The same remembered gres also sizes the project cards, so a project
+  poll that ran before GPUs were tracked cannot leave them at 0 GPU-hours.
+  Where `sinfo` reports no gres at all, `gpus_per_node = { gpu = 4 }`
   states the node size (it also marks the partition as a GPU one).
   `gpu_hour_factor` converts Slurm GPU units into billed GPU-hours (LUMI-G:
   0.5). The poll itself only ever asks for `lookback_hours`; older history for
