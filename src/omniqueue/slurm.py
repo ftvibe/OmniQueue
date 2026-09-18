@@ -505,7 +505,7 @@ def merge_jobs(squeue_jobs: list[Job], sacct_jobs: list[Job]) -> list[Job]:
 # elapsed x allocated CPUs in seconds (Slurm CPUs: threads on hyperthreaded clusters).
 PROJECT_SQUEUE_FIELDS = "%i|%a|%u|%T|%P|%D|%C|%l|%M|%b|%j"  # %b: gres per node (gpu:4); %j (name) last
 PROJECT_SACCT_FIELDS = ["JobID", "Account", "User", "Partition", "State", "AllocNodes", "AllocCPUS",
-                        "ElapsedRaw", "CPUTimeRAW", "Submit", "Start", "End", "Timelimit", "AllocTRES"]
+                        "ElapsedRaw", "CPUTimeRAW", "Submit", "Start", "End", "Timelimit", "AllocTRES", "ReqTRES"]
 SSHARE_FIELDS = ["Account", "User", "RawShares", "NormShares", "RawUsage", "EffectvUsage", "FairShare",
                  "GrpTRESMins", "GrpTRESRaw", "TRESRunMins"]
 
@@ -574,13 +574,16 @@ def parse_project_sacct(output: str) -> list[dict]:
         if len(cols) < 13 or not cols[0]:
             continue
         job_id, account, user, partition, state, nodes, cpus, elapsed, cputime, submit, start, end, limit = cols[:13]
-        tres = cols[13] if len(cols) > 13 else ""
+        alloc_tres = cols[13] if len(cols) > 13 else ""
+        req_tres = cols[14] if len(cols) > 14 else ""
         rows.append({
             "job_id": job_id, "account": account, "user": user, "partition": partition,
             "state": normalize_state(state), "nodes": _int(nodes), "cpus": _int(cpus),
             "elapsed_s": _int(elapsed), "cpu_s": _int(cputime),
             "submit": _clean_time(submit), "start": _clean_time(start), "end": _clean_time(end),
-            "time_limit_s": parse_duration(limit), "gpus": gpus_from_tres(tres),
+            "time_limit_s": parse_duration(limit),
+            # allocated GPUs; for a job that has not started yet, the requested ones
+            "gpus": gpus_from_tres(alloc_tres) or gpus_from_tres(req_tres),
         })
     return rows
 

@@ -25,15 +25,17 @@ QUEUE_OUT = f"""\
 502|proj-a|bob|PENDING|main|2|64|12:00:00|0:00|N/A|qe|scf
 503_[1-20]|proj-a|bob|PENDING|main|1|32|4:00:00|0:00|N/A|sweep
 504|proj-b|carol|RUNNING|main|1|32|1:00:00|0:30:00|N/A|other
-505|proj-a|dave|RUNNING|gpu|1|16|4:00:00|1:00:00|gpu:a100:2|train
+505|proj-a|dave|RUNNING|gpu|1|16|4:00:00|1:00:00|N/A|train
+506|proj-a|erin|PENDING|small-g|1|16|2:00:00|0:00|N/A|infer
 """
 SACCT_OUT = f"""\
 401|proj-a|alice|main|COMPLETED|2|64|7200|460800|{_t(30)}|{_t(29)}|{_t(27)}|04:00:00|billing=64,cpu=64,mem=100G,node=2
 402|proj-a|bob|main|FAILED|1|32|3600|115200|{_t(10)}|{_t(9)}|{_t(8)}|02:00:00|cpu=32,node=1
 501|proj-a|alice|main|RUNNING|4|128|11400|1459200|{_t(5)}|{_t(3.17)}|Unknown|1-00:00:00|cpu=128,node=4
 403|proj-a|alice|main|COMPLETED|1|32|36000|1152000|{_t(900)}|{_t(890)}|{_t(880)}|12:00:00|cpu=32,node=1
-505|proj-a|dave|gpu|RUNNING|1|16|3600|57600|{_t(2)}|{_t(1)}|Unknown|04:00:00|cpu=16,gres/gpu=2,gres/gpu:a100=2,node=1
-406|proj-a|dave|gpu|COMPLETED|1|32|7200|230400|{_t(50)}|{_t(48)}|{_t(46)}|04:00:00|cpu=32,gres/gpu=4,node=1
+505|proj-a|dave|gpu|RUNNING|1|16|3600|57600|{_t(2)}|{_t(1)}|Unknown|04:00:00|cpu=16,gres/gpu=2,gres/gpu:a100=2,node=1|cpu=16,gres/gpu=2,node=1
+406|proj-a|dave|gpu|COMPLETED|1|32|7200|230400|{_t(50)}|{_t(48)}|{_t(46)}|04:00:00|cpu=32,gres/gpu=4,node=1|cpu=32,gres/gpu=4,node=1
+506|proj-a|erin|small-g|PENDING|0|0|0|0|{_t(0.5)}|Unknown|Unknown|02:00:00||billing=16,cpu=16,gres/gpu=1,mem=60G,node=1
 """
 SSHARE_OUT = """\
 proj-a||1|0.010000|3000000|0.012000|0.612345|cpu=6000000|cpu=1800000|cpu=0
@@ -66,23 +68,24 @@ class ParserTests(unittest.TestCase):
 
     def test_queue(self):
         rows = parse_project_queue(QUEUE_OUT)
-        self.assertEqual(len(rows), 5)
         self.assertEqual(rows[2]["tasks"], 20)
         self.assertEqual(rows[0]["time_limit_s"], 86400)
         self.assertEqual(rows[0]["elapsed_s"], 3 * 3600 + 600)
         self.assertEqual(rows[0]["name"], "vasp-relax")
         self.assertEqual(rows[1]["name"], "qe|scf")  # name is the last field, pipes survive
         self.assertEqual(rows[0]["gpus"], 0)
-        self.assertEqual(rows[4]["gpus"], 2)
+        self.assertEqual(rows[4]["gpus"], 0)  # --gpus-per-node requests do not show in squeue's gres column
+        self.assertEqual(len(rows), 6)
 
     def test_sacct(self):
         rows = parse_project_sacct(SACCT_OUT)
-        self.assertEqual(len(rows), 6)
+        self.assertEqual(len(rows), 7)
         self.assertEqual(rows[0]["cpu_s"], 460800)
         self.assertEqual(rows[2]["end"], "")  # Unknown -> empty
         self.assertEqual(rows[2]["state"], "RUNNING")
         self.assertEqual(rows[4]["gpus"], 2)  # gres/gpu= wins over the typed entry
         self.assertEqual(rows[0]["gpus"], 0)
+        self.assertEqual(rows[6]["gpus"], 1)  # pending: the requested GPUs from ReqTRES
 
     def test_sshare(self):
         rows = parse_sshare(SSHARE_OUT)
@@ -117,11 +120,13 @@ class StoreTests(unittest.TestCase):
             self.assertAlmostEqual(gpu7["gpu_h"], 8 + 2, delta=0.05)
             self.assertAlmostEqual(gpu7["users"]["dave"]["gpu_h"], 10, delta=0.05)
             self.assertNotIn("dave", cpu7["users"])
-            self.assertEqual(s["gpu_partitions"], ["gpu"])
+            self.assertEqual(s["gpu_partitions"], ["gpu", "small-g"])  # gpu from sinfo, small-g learned from job 506
             self.assertTrue(s["has_gpu"])
             self.assertEqual(s["running"]["cpu"], {"jobs": 1, "cores": 128.0, "nodes": 4, "users": {"alice": {"jobs": 1, "cores": 128.0}}})
             self.assertEqual(s["running"]["gpu"]["jobs"], 1)
-            self.assertEqual(s["running"]["gpu"]["gpus"], 2)
+            self.assertEqual(s["running"]["gpu"]["gpus"], 2)  # squeue said nothing: taken from sacct's AllocTRES
+            self.assertEqual(s["pending"]["gpu"]["jobs"], 1)
+            self.assertEqual(s["pending"]["gpu"]["gpus"], 1)  # ... and ReqTRES for the waiting one
             self.assertEqual(s["pending"]["cpu"]["jobs"], 21)  # 1 + 20 array tasks
             self.assertEqual(s["pending"]["cpu"]["cores"], 64 + 20 * 32)
             self.assertEqual(s["users"][0], "alice")
@@ -135,8 +140,10 @@ class StoreTests(unittest.TestCase):
             self.assertGreater(s["daily"][-1]["core_h"], 0)
             self.assertGreater(s["daily"][-1]["gpu_h"], 0)
             # the project's own queue is listed, running first, with the job names
-            self.assertEqual([r["job_id"] for r in s["jobs_now"]], ["501", "505", "502", "503_[1-20]"])
+            self.assertEqual([r["job_id"] for r in s["jobs_now"]], ["501", "505", "502", "503_[1-20]", "506"])
             self.assertEqual(s["jobs_now"][1]["kind"], "gpu")
+            self.assertEqual(s["jobs_now"][1]["gpus"], 2)
+            self.assertEqual(s["jobs_now"][4]["gpus"], 1)
             self.assertEqual(s["jobs_now"][0]["name"], "vasp-relax")
             # without a configured quota the sshare group limit is used
             s2 = store.summary("c1", "proj-a", NOW)
@@ -145,6 +152,20 @@ class StoreTests(unittest.TestCase):
             self.assertEqual(s2["quota"]["used_h"], 30000)
             self.assertIsNone(s2["gpu_quota"])
 
+    def test_old_store_without_gpus_is_refetched(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = self._store(tmp)
+            for rec in store.data["jobs"]["c1"]["proj-a"].values():
+                rec.pop("gpus", None)  # as written before GPUs were tracked
+            store.data["meta"].setdefault("oldest", {})["c1"] = NOW - 60 * 86400
+            store.save()
+            again = ProjectStore(Path(tmp) / "p.json", retention_days=90)
+            self.assertEqual(again.oldest("c1"), NOW)  # coverage reset: the back-fill runs again
+            # a back-fill chunk now overwrites the GPU-less records
+            again.record_backfill("c1", ["proj-a"], NOW - 7 * 86400, parse_project_sacct(SACCT_OUT), NOW + 60)
+            self.assertEqual(again.jobs("c1", "proj-a")["406"]["gpus"], 4)
+            self.assertEqual(again.oldest("c1"), NOW - 7 * 86400)
+
     def test_persist_prune_and_load_samples(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = self._store(tmp)
@@ -152,7 +173,7 @@ class StoreTests(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(os.stat(Path(tmp) / "p.json").st_mode), 0o600)
             again = ProjectStore(Path(tmp) / "p.json", retention_days=90)
             self.assertEqual(again.last_poll("c1"), NOW)
-            self.assertEqual(set(again.jobs("c1", "proj-a")), {"401", "402", "501", "403", "505", "406"})
+            self.assertEqual(set(again.jobs("c1", "proj-a")), {"401", "402", "501", "403", "505", "406", "506"})
             samples = again.load_samples("c1")["main"]
             self.assertEqual(len(samples), 1)
             self.assertEqual(samples[0]["idle"], 3)

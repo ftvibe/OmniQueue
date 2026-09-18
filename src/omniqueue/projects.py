@@ -66,6 +66,18 @@ class ProjectStore:
                 if isinstance(data.get(key), dict):
                     self.data[key] = data[key]
             self.data["meta"].setdefault("last_poll", {})
+            self._migrate()
+
+    def _migrate(self) -> None:
+        """Records written before GPUs were tracked have no ``gpus`` field: forget how far
+        back the history was fetched, so the back-fill runs once more and fills them in."""
+        oldest = self.data["meta"].setdefault("oldest", {})
+        for cluster, projects in self.data["jobs"].items():
+            if any("gpus" not in rec for jobs in projects.values() for rec in jobs.values()):
+                last = self.data["meta"]["last_poll"].get(cluster)
+                if last and oldest.get(cluster, 0) < last:
+                    log.info("%s: re-fetching project history to add GPU counts", cluster)
+                    oldest[cluster] = last
 
     def save(self) -> None:
         with self._lock:
@@ -95,6 +107,7 @@ class ProjectStore:
     def record_backfill(self, cluster: str, projects: list[str], start_ts: float, sacct_rows: list[dict], now: float) -> None:
         """Merge an older chunk of accounting and move the coverage marker back to `start_ts`."""
         with self._lock:
+            self._learn_gpu_partitions(cluster, sacct_rows)
             jobs = self.data["jobs"].setdefault(cluster, {})
             for row in sacct_rows:
                 proj = row.get("account") or ""
@@ -103,14 +116,26 @@ class ProjectStore:
                 rec = {k: row.get(k) for k in ("user", "partition", "state", "nodes", "cpus", "cpu_s", "submit",
                                               "start", "end", "time_limit_s", "elapsed_s", "gpus")}
                 rec["seen"] = now
-                jobs.setdefault(proj, {}).setdefault(row["job_id"], rec)  # a fresher record wins
+                existing = jobs.setdefault(proj, {}).get(row["job_id"])
+                if existing is None or "gpus" not in existing:  # a fresher record wins, unless it predates GPU tracking
+                    jobs[proj][row["job_id"]] = rec
             oldest = self.data["meta"].setdefault("oldest", {})
             oldest[cluster] = min(oldest.get(cluster, start_ts), start_ts)
+
+    def _learn_gpu_partitions(self, cluster: str, rows: list[dict]) -> None:
+        """A partition where any job was allocated GPUs is a GPU partition (sites whose
+        sinfo gres is empty or filtered out still get the right split this way)."""
+        learned = self.data["meta"].setdefault("gpu_partitions", {}).setdefault(cluster, [])
+        for row in rows:
+            part = row.get("partition") or ""
+            if (row.get("gpus") or 0) > 0 and part and part not in learned:
+                learned.append(part)
 
     def record_poll(self, cluster: str, projects: list[str], now: float, sacct_rows: list[dict],
                     queue_rows: list[dict], sshare_rows: list[dict], load_parts: list[dict],
                     window_start: float | None = None) -> None:
         with self._lock:
+            self._learn_gpu_partitions(cluster, sacct_rows + queue_rows)
             jobs = self.data["jobs"].setdefault(cluster, {})
             for row in sacct_rows:
                 proj = row.get("account") or ""
@@ -237,9 +262,12 @@ class ProjectStore:
         return out
 
     def gpu_partitions(self, cluster: str, configured: list[str] | None = None) -> set[str]:
-        """Partitions whose jobs count as GPU jobs: the configured list, plus those sinfo reports GPUs for."""
+        """Partitions whose jobs count as GPU jobs: the configured list, those sinfo reports
+        GPUs for, and those where a job was seen with GPUs allocated."""
         parts = set(configured or [])
         parts.update(p for p, n in self.gpn_map(cluster).items() if n > 0)
+        with self._lock:
+            parts.update(self.data["meta"].get("gpu_partitions", {}).get(cluster, []))
         return parts
 
     def summary(self, cluster: str, project: str, now: float, me: str | None = None,
@@ -261,9 +289,17 @@ class ProjectStore:
 
         def gpus_of(rec: dict, count: int = 1) -> float:
             g = rec.get("gpus") or 0
-            if not g and (rec.get("partition") or "") in gpu_parts:  # gres not readable: assume whole nodes
+            if not g and (rec.get("partition") or "") in gpu_parts:  # nothing readable: assume whole nodes
                 g = (rec.get("nodes") or 1) * gpn.get(rec.get("partition") or "", 0)
             return g * count
+
+        def with_accounting(row: dict) -> dict:
+            """squeue's gres column misses --gpus-per-node requests; sacct's TRES has them."""
+            if not row.get("gpus"):
+                acc = jobs.get(row.get("job_id") or "")
+                if acc and acc.get("gpus"):
+                    return {**row, "gpus": acc["gpus"]}
+            return row
 
         def kind_of(rec: dict) -> str:
             return "gpu" if (rec.get("gpus") or 0) > 0 or (rec.get("partition") or "") in gpu_parts else "cpu"
@@ -345,6 +381,7 @@ class ProjectStore:
             bucket = running if row.get("state") == "RUNNING" else pending if row.get("state") == "PENDING" else None
             if bucket is None:
                 continue
+            row = with_accounting(row)
             count = row.get("tasks") or 1
             jobs_now.append({**row, "kind": kind_of(row), "cores": cores_of(row), "gpus": gpus_of(row),
                              "category": "running" if row.get("state") == "RUNNING" else "pending"})
@@ -491,7 +528,7 @@ class ProjectPoller:
     def fetch(self, cluster: ClusterConfig, start_ts: float) -> tuple[list[dict], list[dict], list[dict], list[dict], list[str]]:
         """Run the combined command with an sacct window from `start_ts` to now.
         Returns (queue rows, sacct rows, sshare rows, load partitions, warnings)."""
-        res = self._run(cluster, project_command(list(cluster.projects), start_ts, cluster.load_partitions or None))
+        res = self._run(cluster, project_command(list(cluster.projects), start_ts, None))  # all partitions: GPU detection needs them
         section, warnings = self._sections(res)
         queue_rows = parse_project_queue(section("squeue_proj", required=True))
         sacct_rows = parse_project_sacct(section("sacct_proj"))
@@ -698,14 +735,14 @@ class ProjectPoller:
                 continue
             partitions = {}
             for part, ss in samples.items():
-                if not ss:
+                if not ss or (c.load_partitions and part not in c.load_partitions):
                     continue
                 last = ss[-1]
                 partitions[part] = {
                     "samples": ss, "time_limit_s": last.get("time_limit_s"), "total_nodes": last.get("total"),
                     "cores_per_node": (last.get("cpus_per_node") or 0) // max(1, last.get("tpc") or 1),
                     "gpus_per_node": last.get("gpus_per_node") or 0,
-                    "gpu": part in c.gpu_partitions or (last.get("gpus_per_node") or 0) > 0,
+                    "gpu": part in self.store.gpu_partitions(c.name, c.gpu_partitions),
                     "typical_hours": self.store.typical_hours(c.name, part),
                 }
             me = self.me(c)

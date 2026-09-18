@@ -298,10 +298,14 @@ overridable per cluster). One card per project sits under the cluster cards:
   *gpu now / gpu 30 d* count GPU jobs in GPUs and GPU-hours, with their own
   per-day chart and a GPU quota bar (`project_gpu_quotas`, or the
   `gres/gpu` group limit from `sshare`). A job is a GPU job when Slurm
-  allocated it GPUs (`AllocTRES` in `sacct`, `%b` in `squeue`) or when it runs
-  on a GPU partition; GPU partitions are those `sinfo` reports a `gpu` gres
-  for, or the `gpu_partitions` list in the cluster entry. The two sides never
-  mix: a GPU job's cores are not added to the CPU figures;
+  allocated or, while it waits, requested GPUs for it (`AllocTRES` and
+  `ReqTRES` in `sacct`; `squeue`'s gres column is used too but does not show
+  `--gpus-per-node` requests) or when it runs on a GPU partition. GPU
+  partitions are those `sinfo` reports a `gpu` gres for, those where a job
+  with GPUs has been seen, and the `gpu_partitions` list in the cluster entry.
+  The two sides never mix: a GPU job's cores are not added to the CPU figures.
+  A store written before GPUs were tracked is re-fetched once, in the usual
+  back-fill chunks, to add the GPU counts;
 * the user legend with each person's 30-day core-hours and, where they have
   any, GPU-hours (you are marked);
 * the project's **fairshare** factor (and yours), from `sshare`;
