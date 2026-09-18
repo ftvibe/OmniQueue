@@ -58,5 +58,25 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(json.loads(self.path.read_text())["jobs"], [])
 
 
+class RefetchTests(unittest.TestCase):
+    def test_records_without_gpus_trigger_one_refetch(self):
+        import json
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "h.json"
+            old = {"cluster": "c", "job_id": "1", "name": "a", "state": "COMPLETED", "last_seen": 1.0}  # no gpus field
+            new = {"cluster": "d", "job_id": "2", "name": "b", "state": "COMPLETED", "last_seen": 1.0, "gpus": 0}
+            path.write_text(json.dumps({"version": 1, "jobs": [old, new]}))
+            store = HistoryStore(path, retention_days=10 ** 6)
+            self.assertTrue(store.needs_refetch("c"))
+            self.assertFalse(store.needs_refetch("d"))
+            store.refetched("c")
+            self.assertFalse(store.needs_refetch("c"))
+            store.save()
+            self.assertFalse(HistoryStore(path, retention_days=10 ** 6).needs_refetch("c"))  # saved records carry the field
+
+
 if __name__ == "__main__":
     unittest.main()

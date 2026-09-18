@@ -127,7 +127,8 @@ class Collector:
         try:
             # a fresh history gets the whole retention window once, so "my usage" starts complete;
             # afterwards only lookback_hours (finished jobs stay in the local store)
-            lookback = self.config.lookback_hours if self.history.jobs_for(cluster.name) else self.config.history_days * 24
+            full = not self.history.jobs_for(cluster.name) or self.history.needs_refetch(cluster.name)
+            lookback = self.config.history_days * 24 if full else self.config.lookback_hours
             # which partitions have GPUs: a cheap sinfo, on the first poll and then every 6 h
             gres_age = self.history.partition_gres_age(cluster.name)
             want_gres = gres_age is None or gres_age > 6 * 3600
@@ -173,6 +174,8 @@ class Collector:
 
         merged = merge_jobs(squeue_jobs, sacct_jobs)
         jobs = self.history.update_cluster(cluster.name, merged)
+        if full and cluster.use_sacct:
+            self.history.refetched(cluster.name)
         status.ok = True
         status.error = None
         status.error_kind = None

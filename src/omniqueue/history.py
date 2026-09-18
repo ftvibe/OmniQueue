@@ -34,6 +34,7 @@ class HistoryStore:
         if isinstance(data.get("meta"), dict):
             self.meta.update(data["meta"])
             self.meta.setdefault("gpu_partitions", {})
+        stale: set[str] = set()
         for d in data.get("jobs", []):
             try:
                 job = Job.from_dict(d)
@@ -41,6 +42,10 @@ class HistoryStore:
                 continue
             job.source = "history"
             self._jobs[job.key] = job
+            if "gpus" not in d:  # written before GPUs were tracked
+                stale.add(job.cluster)
+        if stale:  # ask sacct for the whole window once more, so those jobs get their GPU counts
+            self.meta["refetch"] = sorted(set(self.meta.get("refetch", [])) | stale)
 
     def save(self) -> None:
         with self._lock:
@@ -94,6 +99,15 @@ class HistoryStore:
     def all_jobs(self) -> list[Job]:
         with self._lock:
             return list(self._jobs.values())
+
+    def needs_refetch(self, cluster: str) -> bool:
+        """True when this cluster's stored jobs predate a field the poll now fills in."""
+        with self._lock:
+            return cluster in self.meta.get("refetch", [])
+
+    def refetched(self, cluster: str) -> None:
+        with self._lock:
+            self.meta["refetch"] = [c for c in self.meta.get("refetch", []) if c != cluster]
 
     def set_partition_gres(self, cluster: str, gres: dict[str, int], now: float | None = None) -> None:
         """Remember which partitions of a cluster have GPUs (and how many per node)."""
