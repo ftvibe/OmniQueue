@@ -145,6 +145,14 @@ class StoreTests(unittest.TestCase):
             self.assertEqual(s["jobs_now"][1]["gpus"], 2)
             self.assertEqual(s["jobs_now"][4]["gpus"], 1)
             self.assertEqual(s["jobs_now"][0]["name"], "vasp-relax")
+            # LUMI-style billing: two Slurm units per GPU, half a GPU-hour each
+            h = store.summary("c1", "proj-a", NOW, quota_gpu_h=500, gpu_factor=0.5)
+            self.assertAlmostEqual(h["usage"]["7"]["gpu"]["gpu_h"], 5, delta=0.05)
+            self.assertEqual(h["running"]["gpu"]["gpus"], 1.0)
+            self.assertEqual(h["jobs_now"][1]["gpu_units"], 2)
+            self.assertEqual(h["jobs_now"][1]["gpus"], 1.0)
+            self.assertAlmostEqual(h["gpu_quota"]["used_h"], 5, delta=0.05)
+            self.assertEqual(h["usage"]["7"]["gpu"]["jobs"], 2)  # the split itself is unchanged
             # without a configured quota the sshare group limit is used
             s2 = store.summary("c1", "proj-a", NOW)
             self.assertEqual(s2["quota"]["source"], "sshare")
@@ -323,6 +331,9 @@ class ConfigTests(unittest.TestCase):
             config_from_dict({"clusters": [{"name": "a", "host": "a", "project_quotas": {"p": -1}}]})
         with self.assertRaises(ConfigError):
             config_from_dict({"project_refresh_seconds": 10, "clusters": [{"name": "a", "host": "a"}]})
+        with self.assertRaises(ConfigError):
+            config_from_dict({"clusters": [{"name": "a", "host": "a", "gpu_hour_factor": 0}]})
+        self.assertEqual(config_from_dict({"clusters": [{"name": "a", "host": "a", "gpu_hour_factor": 0.5}]}).clusters[0].gpu_hour_factor, 0.5)
 
 
 def _samples(n, idle, pending_nodes, total=100, step=7200, tpc=1, gpn=0):
@@ -390,6 +401,9 @@ class PredictorTests(unittest.TestCase):
         self.assertIn("only 4 GPUs per node", too_many["excluded"][0]["excluded"])
         over_quota = predict(Request(nodes=1, hours=10, gpus=2), self._data())  # 20 GPU-h > 10 left
         self.assertIn("quota", over_quota["excluded"][0]["excluded"])
+        halved = self._data()
+        halved["clusters"]["free"]["gpu_factor"] = 0.5  # 20 units-h are 10 GPU-h: exactly the remaining quota
+        self.assertEqual(len(predict(Request(nodes=1, hours=10, gpus=2), halved)["candidates"]), 1)
         explicit = predict(Request(nodes=1, hours=2, gpus=0, partitions=["gpu"]), self._data())
         self.assertEqual(len(explicit["candidates"]), 1)  # naming the partition overrides the CPU/GPU split
 

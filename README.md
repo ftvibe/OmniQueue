@@ -74,6 +74,7 @@ host = "tetralith"          # anything ssh accepts, aliases from ~/.ssh/config i
 # project_quotas = { "naiss2025-1-23" = 100000 }  # core-hours per 30 days, if sshare does not publish a limit
 # project_gpu_quotas = { "naiss2025-1-23" = 2000 } # GPU-hours per 30 days; GPU jobs are kept apart from CPU jobs
 # gpu_partitions = ["gpu"]                         # which partitions are GPU ones; default: those sinfo reports GPUs for
+# gpu_hour_factor = 0.5                            # GPU-hours per Slurm GPU unit and hour (LUMI-G: 8 units per node for 4 MI250X)
 # project_refresh_seconds = 3600                  # poll this cluster's projects hourly instead of the global 2 h
 # nice = 0                  # the --nice you usually submit with here (the experimental predictor accounts for it)
 
@@ -304,6 +305,10 @@ overridable per cluster). One card per project sits under the cluster cards:
   partitions are those `sinfo` reports a `gpu` gres for, those where a job
   with GPUs has been seen, and the `gpu_partitions` list in the cluster entry.
   The two sides never mix: a GPU job's cores are not added to the CPU figures.
+  Where Slurm's GPU units are not whole GPUs, `gpu_hour_factor` converts them:
+  LUMI-G exposes each MI250X as two units and bills half a GPU-hour per unit,
+  so `gpu_hour_factor = 0.5` there makes the GPU-hours, the GPUs in use and
+  the predictor's quota check match the invoice.
   A store written before GPUs were tracked is re-fetched once, in the usual
   back-fill chunks, to add the GPU counts;
 * the user legend with each person's 30-day core-hours and, where they have

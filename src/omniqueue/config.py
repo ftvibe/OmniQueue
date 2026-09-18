@@ -42,6 +42,7 @@ class ClusterConfig:
     project_quotas: dict[str, float] = field(default_factory=dict)  # project -> core-hours per 30 days (optional)
     project_gpu_quotas: dict[str, float] = field(default_factory=dict)  # project -> GPU-hours per 30 days (optional)
     gpu_partitions: list[str] = field(default_factory=list)  # partitions counted as GPU; [] = detect from sinfo gres
+    gpu_hour_factor: float = 1.0  # GPU-hours billed per Slurm GPU unit and hour (LUMI-G: 0.5, two units per MI250X)
     project_refresh_seconds: int | None = None  # how often the projects are polled here; None = global default
     nice: int = 0  # the --nice you usually submit with on this cluster (lowers priority; used by the predictor)
 
@@ -150,6 +151,8 @@ host = "tetralith"               # ssh alias
 # project_quotas = { "naiss2025-1-23" = 100000 }   # core-hours per 30 days, when the site does not publish it via sshare
 # project_gpu_quotas = { "naiss2025-1-23" = 2000 } # GPU-hours per 30 days (GPU jobs are counted separately from CPU jobs)
 # gpu_partitions = ["gpu"]       # partitions whose jobs count as GPU jobs; default: those sinfo reports GPUs for
+# gpu_hour_factor = 0.5          # GPU-hours billed per Slurm GPU unit: LUMI-G shows 8 units per node for 4 MI250X
+                                 # and bills each unit as half a GPU-hour; default 1.0
 # project_refresh_seconds = 3600 # poll the projects on this cluster every hour instead of the global 2 h
 # nice = 0                       # the --nice you usually submit with here (the predictor accounts for it)
 
@@ -274,6 +277,9 @@ def config_from_dict(raw: dict) -> Config:
             for proj, hours in quotas.items():
                 if not isinstance(hours, (int, float)) or hours <= 0:
                     raise ConfigError(f"clusters[{i}] ({c['name']}).{key}[{proj!r}] must be a positive number of {unit}.")
+        factor = c.get("gpu_hour_factor", 1.0)
+        if not isinstance(factor, (int, float)) or factor <= 0:
+            raise ConfigError(f"clusters[{i}] ({c['name']}).gpu_hour_factor must be a positive number.")
         if c.get("project_refresh_seconds") is not None and int(c["project_refresh_seconds"]) < 300:
             raise ConfigError(f"clusters[{i}] ({c['name']}).project_refresh_seconds must be at least 300.")
         clusters.append(ClusterConfig(**c))

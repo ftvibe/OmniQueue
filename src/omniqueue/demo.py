@@ -187,7 +187,7 @@ def demo_config() -> Config:
             ClusterConfig(name="dardel", host="dardel.pdc.kth.se", color="#e2856c", load_partitions=["main", "gpu"],
                           projects=["naiss2025-3-7"], project_refresh_seconds=3600, nice=2000),
             ClusterConfig(name="lumi", host="lumi.csc.fi", color="#b39a4b", projects=["project_465000123"],
-                          project_gpu_quotas={"project_465000123": 5000}),
+                          project_gpu_quotas={"project_465000123": 5000}, gpu_hour_factor=0.5),
             ClusterConfig(name="offline-cluster", host="unreachable.example.org", color="#8fb8b4", projects=["naiss2025-9-9"]),
         ],
         refresh_seconds=30,

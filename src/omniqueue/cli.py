@@ -339,7 +339,8 @@ def cmd_projects(args) -> int:
         print(f"   CPU now: {r['cpu']['jobs']} jobs on {r['cpu']['nodes']} nodes ({r['cpu']['cores']:,.0f} cores) · waiting: {q['cpu']['jobs']} jobs ({q['cpu']['cores']:,.0f} cores)")
         if p["has_gpu"]:
             print(f"   GPU now: {r['gpu']['jobs']} jobs on {r['gpu']['nodes']} nodes ({r['gpu']['gpus']:,.0f} GPUs) · waiting: {q['gpu']['jobs']} jobs ({q['gpu']['gpus']:,.0f} GPUs)"
-                  + (f"   [GPU partitions: {', '.join(p['gpu_partitions'])}]" if p["gpu_partitions"] else ""))
+                  + (f"   [GPU partitions: {', '.join(p['gpu_partitions'])}]" if p["gpu_partitions"] else "")
+                  + (f"   [{p['gpu_factor']:g} GPU-h per Slurm GPU unit]" if p.get("gpu_factor", 1) != 1 else ""))
         if p["shares"]:
             fs = p["shares"].get("fairshare")
             print(f"   fairshare: {fs:.3f}" if fs is not None else "   fairshare: n/a", end="")

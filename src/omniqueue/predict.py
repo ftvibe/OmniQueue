@@ -97,6 +97,7 @@ def predict(request: Request, data: dict[str, Any]) -> dict[str, Any]:
             continue
         nice = int(cl.get("nice") or 0)
         interval = float(cl.get("interval") or 7200)
+        gpu_factor = float(cl.get("gpu_factor") or 1.0)  # billed GPU-hours per Slurm GPU unit and hour
         projects = cl.get("projects") or {}
         proj_names = [p for p in projects if not request.projects or p in request.projects] or [None]
         if request.projects and proj_names == [None]:
@@ -179,7 +180,7 @@ def predict(request: Request, data: dict[str, Any]) -> dict[str, Any]:
                     reasons.append(f"--nice {nice} (x{nice_factor:.2f})")
                 exclusion = None
                 if request.gpus:
-                    quota, unit, need = pinfo.get("gpu_quota") if proj else None, "GPU-h", request.gpus * nodes_needed * request.hours
+                    quota, unit, need = pinfo.get("gpu_quota") if proj else None, "GPU-h", request.gpus * nodes_needed * request.hours * gpu_factor
                 else:
                     quota, unit, need = pinfo.get("quota") if proj else None, "core-h", (request.cores or nodes_needed * (cpn or 1)) * request.hours
                 if quota and quota.get("limit_h"):

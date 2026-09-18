@@ -689,6 +689,7 @@
     if (state.projects?.projects?.some((p) => p.fetching || p.backfill_pending)) setTimeout(fetchProjects, p_backfill_ms(state.projects));
   }
   const p_backfill_ms = (pr) => (pr.projects.some((p) => p.fetching) ? 2000 : 15000); // chunks arrive a minute apart
+  const pr_history_days = () => state.projects?.history_days || 90;
   async function refreshProjects() {
     try { await post("/api/projects/refresh"); } catch { /* ignore */ }
     $("#proj-status").textContent = "polling the projects…";
@@ -729,7 +730,12 @@
     const card = el("article", { class: "card pcard", style: `--card-color:${color}`, title: "click for the project's running and waiting jobs",
       onclick: (e) => { if (!e.target.closest("a, button")) enterProjectView(p.cluster, p.project); } });
     const updated = p.updated ? `updated ${clock(p.updated).slice(0, 5)}` : "no data yet";
-    const cover = p.coverage_days == null ? "" : p.backfill_pending ? ` · loading history: ${Math.round(p.coverage_days)} d so far` : ` · ${Math.round(p.coverage_days)} d`;
+    // stored history may reach further back than the re-fetched part (records older than the marker are still shown)
+    const storedDays = p.oldest ? Math.min(pr_history_days(), (Date.now() / 1000 - p.oldest) / 86400) : 0;
+    const cover = p.coverage_days == null ? ""
+      : !p.backfill_pending ? ` · ${Math.round(p.coverage_days)} d`
+      : storedDays > p.coverage_days + 1 ? ` · updating history: ${Math.round(p.coverage_days)} of ${Math.round(storedDays)} d`
+      : ` · loading history: ${Math.round(p.coverage_days)} d so far`;
     card.append(el("div", { class: "pcard-head" },
       el("span", { class: "w-cpill", style: `background:${color};color:#fff` }, p.cluster),
       el("b", {}, p.project),
@@ -758,11 +764,11 @@
       // GPU side: GPUs now, GPU-hours over 30 days (jobs with GPUs or on a GPU partition)
       rows.append(usageRow("gpu now",
         el("span", {}, `${plural(rg.jobs, "job")} · ${fmtInt(Math.round(rg.gpus))} GPUs`, qg.jobs ? el("span", { class: "muted" }, ` · ${fmtInt(qg.jobs)} waiting`) : null),
-        `${rg.jobs} running GPU jobs on ${rg.nodes} nodes, ${qg.jobs} waiting (${Math.round(qg.gpus)} GPUs asked for)` + (p.gpu_partitions.length ? `; GPU partitions: ${p.gpu_partitions.join(", ")}` : ""),
+        `${rg.jobs} running GPU jobs on ${rg.nodes} nodes, ${qg.jobs} waiting (${Math.round(qg.gpus)} GPUs asked for)` + (p.gpu_partitions.length ? `; GPU partitions: ${p.gpu_partitions.join(", ")}` : "") + (p.gpu_factor !== 1 ? `; Slurm GPU units x ${p.gpu_factor}` : ""),
         users.map((u) => [u, rg.users[u]?.gpus || 0]).filter(([, v]) => v > 0), rg.gpus, "GPUs in use right now, by user"));
       rows.append(usageRow("gpu 30 d",
         el("span", {}, `${fmtGpuH(u30.gpu.gpu_h)} · ${plural(u30.gpu.jobs, "job")}`, el("span", { class: "muted" }, ` · 7 d ${fmtCoreH(u7.gpu.gpu_h)}`)),
-        `${Math.round(u30.gpu.gpu_h).toLocaleString("en")} GPU-hours in ${u30.gpu.jobs} GPU jobs over 30 days (${Math.round(u30.gpu.core_h).toLocaleString("en")} core-hours alongside); ${Math.round(u7.gpu.gpu_h).toLocaleString("en")} GPU-h in the last 7 days`,
+        `${Math.round(u30.gpu.gpu_h).toLocaleString("en")} GPU-hours in ${u30.gpu.jobs} GPU jobs over 30 days (${Math.round(u30.gpu.core_h).toLocaleString("en")} core-hours alongside); ${Math.round(u7.gpu.gpu_h).toLocaleString("en")} GPU-h in the last 7 days` + (p.gpu_factor !== 1 ? `; billed at ${p.gpu_factor} GPU-h per Slurm GPU unit and hour` : ""),
         users.map((u) => [u, u30.gpu.users[u]?.gpu_h || 0]).filter(([, v]) => v > 0), u30.gpu.gpu_h, "GPU-hours in the last 30 days, by user"));
     }
     card.append(rows);
@@ -827,7 +833,7 @@
     const rc = p.running.cpu, rg = p.running.gpu, qc = p.pending.cpu, qg = p.pending.gpu;
     title.replaceChildren(el("span", { class: "w-cpill", style: `background:${color};color:#fff` }, p.cluster), el("b", {}, p.project),
       el("span", { class: "muted" }, ` · ${plural(rc.jobs + rg.jobs, "job")} running, ${fmtInt(qc.jobs + qg.jobs)} waiting`
-        + (p.has_gpu ? ` · ${fmtInt(Math.round(rc.cores))} cores and ${fmtInt(Math.round(rg.gpus))} GPUs in use` : ` · ${fmtInt(Math.round(rc.cores))} cores in use`)));
+        + (p.has_gpu ? ` · ${fmtInt(Math.round(rc.cores))} cores and ${fmtInt(Math.round(rg.gpus))} GPUs in use` + (p.gpu_factor !== 1 ? ` (Slurm units x ${p.gpu_factor})` : "") : ` · ${fmtInt(Math.round(rc.cores))} cores in use`)));
     $("#project-note").textContent = p.updated
       ? `every user's jobs in this project as of the last project poll (${clock(p.updated).slice(0, 5)}, every ${fmtEvery(p.refresh_seconds)}); pending arrays count as one row`
       : "no data yet";
@@ -845,7 +851,8 @@
         el("td", { class: "num mono" }, fmtDuration(j.time_limit_s)),
         el("td", { class: "num" }, j.nodes || "–"),
         el("td", { class: "num" }, fmtInt(Math.round(j.cores))),
-        el("td", { class: `num ${j.kind === "gpu" ? "gpu" : "muted"}` }, j.kind === "gpu" ? fmtInt(Math.round(j.gpus)) : "–"),
+        el("td", { class: `num ${j.kind === "gpu" ? "gpu" : "muted"}`, title: j.kind === "gpu" && p.gpu_factor !== 1 ? `${j.gpu_units} Slurm GPU units x ${p.gpu_factor}` : "" },
+          j.kind === "gpu" ? (p.gpu_factor !== 1 && j.gpus !== Math.round(j.gpus) ? j.gpus.toFixed(1) : fmtInt(Math.round(j.gpus))) : "–"),
         el("td", {}, j.partition || "–"));
     });
     $("#project-jobs tbody").replaceChildren(...rows);
@@ -869,7 +876,7 @@
     const fetching = pr.projects.some((p) => p.fetching);
     const filling = pr.projects.some((p) => p.backfill_pending && !p.error);
     $("#proj-status").textContent = fetching ? (pr.projects.some((p) => p.backfilling) ? "loading older history…" : "polling the projects…")
-      : filling ? `older history is being loaded in ${pr.backfill_days}-day chunks, a minute apart · polled every ${fmtEvery(pr.refresh_seconds)} · ${pr.history_days} d kept`
+      : filling ? `history is being ${pr.projects.some((p) => p.backfill_pending && p.oldest && (Date.now() / 1000 - p.oldest) / 86400 > (p.coverage_days || 0) + 1) ? "updated" : "loaded"} in ${pr.backfill_days}-day chunks, a minute apart · polled every ${fmtEvery(pr.refresh_seconds)} · ${pr.history_days} d kept`
       : `who runs how much in your Slurm projects · polled in the background every ${fmtEvery(pr.refresh_seconds)} · ${pr.history_days} d kept`;
     $("#proj-status").classList.toggle("spin", fetching);
     const collapsed = state.projectsCollapsed;

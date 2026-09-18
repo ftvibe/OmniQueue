@@ -272,8 +272,11 @@ class ProjectStore:
 
     def summary(self, cluster: str, project: str, now: float, me: str | None = None,
                 quota_core_h: float | None = None, quota_gpu_h: float | None = None,
-                gpu_partitions: list[str] | None = None) -> dict[str, Any]:
+                gpu_partitions: list[str] | None = None, gpu_factor: float = 1.0) -> dict[str, Any]:
         """Everything the project card shows, computed from the store.
+
+        ``gpu_factor`` converts Slurm GPU units into billed GPUs: LUMI-G exposes each
+        MI250X as two units and bills half a GPU-hour per unit-hour (0.5).
 
         CPU jobs and GPU jobs (any allocated GPU, or a job on a GPU partition) are kept
         strictly apart: the ``cpu`` buckets hold CPU jobs in core-hours, the ``gpu``
@@ -287,11 +290,15 @@ class ProjectStore:
         def cores_of(rec: dict) -> float:
             return (rec.get("cpus") or 0) / max(1, tpc.get(rec.get("partition") or "", 1))
 
-        def gpus_of(rec: dict, count: int = 1) -> float:
+        def gpu_units(rec: dict) -> float:
             g = rec.get("gpus") or 0
             if not g and (rec.get("partition") or "") in gpu_parts:  # nothing readable: assume whole nodes
                 g = (rec.get("nodes") or 1) * gpn.get(rec.get("partition") or "", 0)
-            return g * count
+            return g
+
+        def gpus_of(rec: dict, count: int = 1) -> float:
+            """Billed GPUs of a job: Slurm units x the cluster's factor."""
+            return gpu_units(rec) * gpu_factor * count
 
         def with_accounting(row: dict) -> dict:
             """squeue's gres column misses --gpus-per-node requests; sacct's TRES has them."""
@@ -383,7 +390,7 @@ class ProjectStore:
                 continue
             row = with_accounting(row)
             count = row.get("tasks") or 1
-            jobs_now.append({**row, "kind": kind_of(row), "cores": cores_of(row), "gpus": gpus_of(row),
+            jobs_now.append({**row, "kind": kind_of(row), "cores": cores_of(row), "gpus": gpus_of(row), "gpu_units": gpu_units(row),
                              "category": "running" if row.get("state") == "RUNNING" else "pending"})
             cores = cores_of(row) * count
             user = row.get("user") or "?"
@@ -448,6 +455,7 @@ class ProjectStore:
             "cluster": cluster, "project": project, "updated": (q or {}).get("ts") or self.last_poll(cluster),
             "running": running, "pending": pending, "usage": usage, "daily": daily, "shares": shares,
             "quota": quota, "gpu_quota": gpu_quota, "has_gpu": has_gpu, "gpu_partitions": sorted(gpu_parts),
+            "gpu_factor": gpu_factor,
             "users": users, "me": me, "jobs_known": len(jobs), "oldest": oldest,
             "jobs_now": sorted(jobs_now, key=lambda r: (r["category"] != "running", -(r.get("elapsed_s") or 0), r["job_id"])),
         }
@@ -708,7 +716,8 @@ class ProjectPoller:
             clusters.append(st)
             for proj in c.projects:
                 s = self.store.summary(c.name, proj, now, me=self.me(c), quota_core_h=c.project_quotas.get(proj),
-                                       quota_gpu_h=c.project_gpu_quotas.get(proj), gpu_partitions=c.gpu_partitions)
+                                       quota_gpu_h=c.project_gpu_quotas.get(proj), gpu_partitions=c.gpu_partitions,
+                                       gpu_factor=c.gpu_hour_factor)
                 s["color"] = st["color"]
                 s["error"] = st["error"]
                 s["error_kind"] = st["error_kind"]
@@ -749,7 +758,8 @@ class ProjectPoller:
             projs = {}
             for proj in c.projects:
                 summ = self.store.summary(c.name, proj, now, me=me, quota_core_h=c.project_quotas.get(proj),
-                                          quota_gpu_h=c.project_gpu_quotas.get(proj), gpu_partitions=c.gpu_partitions)
+                                          quota_gpu_h=c.project_gpu_quotas.get(proj), gpu_partitions=c.gpu_partitions,
+                                          gpu_factor=c.gpu_hour_factor)
                 sh = summ.get("shares") or {}
                 projs[proj] = {
                     "fairshare_me": (sh.get("users", {}).get(me) or {}).get("fairshare"),
@@ -764,7 +774,7 @@ class ProjectPoller:
                 if s and st and j.state != "PENDING" and st >= s:
                     own_waits.append({"partition": j.partition, "nodes": j.nodes or 1, "wait_s": st - s, "start_ts": st})
             clusters[c.name] = {"nice": c.nice, "partitions": partitions, "projects": projs, "own_waits": own_waits,
-                                "color": c.color, "interval": self.config.project_interval(c)}
+                                "color": c.color, "interval": self.config.project_interval(c), "gpu_factor": c.gpu_hour_factor}
         return {"now": now, "clusters": clusters}
 
 
