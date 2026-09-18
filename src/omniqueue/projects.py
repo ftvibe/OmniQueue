@@ -131,16 +131,47 @@ class ProjectStore:
         GPU account folds into its project); either way: account -> project."""
         return dict(projects) if isinstance(projects, dict) else {p: p for p in projects}
 
-    def _note_companions(self, cluster: str, accounts: dict[str, str], *row_lists: list[dict]) -> None:
+    def _note_companions(self, cluster: str, accounts: dict[str, str], *row_lists: list[dict]) -> list[str]:
         """Remember which companion accounts Slurm actually knows (a row came back for them),
-        so the card names only accounts that exist.  Call with the lock held."""
+        so the card names only accounts that exist.  Returns the ones seen for the first time.
+        Call with the lock held."""
         seen = self.data["meta"].setdefault("companions", {}).setdefault(cluster, {})
+        new: list[str] = []
         for rows in row_lists:
             for row in rows:
                 acc = row.get("account") or ""
                 proj = accounts.get(acc)
-                if proj is not None and acc != proj:
+                if proj is not None and acc != proj and seen.get(proj) != acc:
                     seen[proj] = acc
+                    new.append(acc)
+        return new
+
+    def fold_accounts(self, cluster: str, accounts: dict[str, str]) -> None:
+        """A companion account that used to be watched as a project of its own (the "-gpu"
+        entry listed under `projects` before this version folded it in) has its jobs, queue
+        and shares moved under the project, so nothing already fetched is lost."""
+        with self._lock:
+            jobs = self.data["jobs"].setdefault(cluster, {})
+            queue = self.data["queue"].setdefault(cluster, {})
+            shares = self.data["shares"].setdefault(cluster, {})
+            seen = self.data["meta"].setdefault("companions", {}).setdefault(cluster, {})
+            for acc, proj in accounts.items():
+                if acc == proj or not (acc in jobs or acc in queue or acc in shares):
+                    continue
+                for jid, rec in jobs.pop(acc, {}).items():
+                    jobs.setdefault(proj, {}).setdefault(jid, rec)
+                old_q = queue.pop(acc, None)
+                if old_q:
+                    cur = queue.setdefault(proj, {"ts": old_q["ts"], "rows": []})
+                    have = {r.get("job_id") for r in cur["rows"]}
+                    cur["rows"] = cur["rows"] + [r for r in old_q["rows"] if r.get("job_id") not in have]
+                old_s = shares.pop(acc, None)
+                if old_s and old_s[-1].get("account"):
+                    target = shares.setdefault(proj, [])
+                    if target:
+                        target[-1].setdefault("gpu_account", {"name": acc, **old_s[-1]["account"]})
+                seen[proj] = acc
+                log.info("%s: %s is now part of %s", cluster, acc, proj)
 
     def companion(self, cluster: str, project: str) -> str | None:
         """The companion GPU account seen for a project, if Slurm ever returned a row for it."""
@@ -183,7 +214,14 @@ class ProjectStore:
         projects = list(dict.fromkeys(accounts.values()))
         with self._lock:
             self._learn_gpu_partitions(cluster, sacct_rows + queue_rows)
-            self._note_companions(cluster, accounts, sacct_rows, queue_rows, sshare_rows)
+            fresh = self._note_companions(cluster, accounts, sacct_rows, queue_rows, sshare_rows)
+            if fresh and window_start is not None:
+                # a companion Slurm knows but this store has never fetched: its older jobs are
+                # missing, so the back-fill runs again from this poll's window backwards
+                oldest = self.data["meta"].setdefault("oldest", {})
+                if oldest.get(cluster) is not None and oldest[cluster] < window_start:
+                    oldest[cluster] = window_start
+                    log.info("%s: %s joined the projects; fetching the older history again", cluster, ", ".join(fresh))
             jobs = self.data["jobs"].setdefault(cluster, {})
             for row in sacct_rows:
                 proj = accounts.get(row.get("account") or "")
@@ -582,6 +620,7 @@ class ProjectPoller:
         self.status: dict[str, dict[str, Any]] = {}
         now = time.time()
         for c in config.project_clusters:
+            store.fold_accounts(c.name, c.account_map)  # a "-gpu" project that is a companion now keeps its history
             last = store.last_poll(c.name)
             self.status[c.name] = {
                 "name": c.name, "projects": list(c.projects), "refresh_seconds": config.project_interval(c),
@@ -747,6 +786,7 @@ class ProjectPoller:
                 st.update(error="not logged in", error_kind="login", fetching=False, next_poll=now + 120)
                 self.version += 1
             return
+        self.store.fold_accounts(cluster.name, cluster.account_map)
         last = self.store.last_poll(cluster.name)
         backfill = (last is not None and now - last < interval and self.backfill_pending(cluster, now)
                     and not getattr(self, "_force_regular", False))

@@ -271,7 +271,10 @@ cluster names from your config, `list --state` the job states.
   Slurm has returned a row for it), and the companion's `sshare` limit becomes the
   project's GPU quota. The same folding applies to your own usage row. The suffix
   is `project_gpu_suffix` (default `-gpu`, `""` turns it off) and an odd name goes
-  in `project_gpu_accounts = { project = "account" }`.
+  in `project_gpu_accounts = { project = "account" }`. A `-gpu` account you had
+  listed under `projects` before keeps its stored history: it is moved under the
+  project at start-up. A companion never fetched before is back-filled once Slurm
+  first returns a row for it (the card header shows the progress as usual).
   Where `sinfo` reports no gres at all, `gpus_per_node = { gpu = 4 }`
   states the node size (it also marks the partition as a GPU one).
   `gpu_hour_factor` converts Slurm GPU units into billed GPU-hours (LUMI-G:

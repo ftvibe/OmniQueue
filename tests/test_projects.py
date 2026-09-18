@@ -614,3 +614,58 @@ class CompanionAccountTests(unittest.TestCase):
             self.assertEqual(s["gpu_quota"]["limit_h"], 100)
             self.assertEqual(s["gpu_quota"]["window"], "allocation (core-h)")
             self.assertEqual(s["quota"]["limit_h"], 1)
+
+
+class CompanionMigrationTests(unittest.TestCase):
+    def _row(self, jid, account, hours_ago=20, part="gpu"):
+        return {"job_id": jid, "account": account, "user": "bob", "partition": part, "state": "COMPLETED", "nodes": 1,
+                "cpus": 64, "cpu_s": 0, "submit": _t(hours_ago + 1), "start": _t(hours_ago), "end": _t(hours_ago - 2),
+                "time_limit_s": 7200, "elapsed_s": 7200, "gpus": 0}
+
+    def test_companion_watched_as_project_before_is_folded_in(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ProjectStore(Path(tmp) / "p.json", retention_days=90)
+            # an older config listed both accounts as projects
+            store.record_poll("d", ["p", "p-gpu"], NOW - 3600, [self._row("1", "p", part="main"), self._row("2", "p-gpu")],
+                              [{"job_id": "9", "account": "p-gpu", "user": "bob", "state": "PENDING", "partition": "gpu", "nodes": 1,
+                                "cpus": 64, "gpus": 0, "tasks": 1, "name": "x"}],
+                              [{"account": "p", "user": "", "grp_tres_mins": {"cpu": 600}, "grp_tres_raw": {}},
+                               {"account": "p-gpu", "user": "", "grp_tres_mins": {"gres/gpu": 6000}, "grp_tres_raw": {"gres/gpu": 60}}], [],
+                              window_start=NOW - 90 * 86400)
+            self.assertEqual(sorted(store.data["jobs"]["d"]), ["p", "p-gpu"])
+            c = ClusterConfig(name="d", host="d", projects=["p"], gpus_per_node={"gpu": 8})
+            store.fold_accounts("d", c.account_map)
+            self.assertEqual(sorted(store.data["jobs"]["d"]), ["p"])
+            self.assertEqual(sorted(store.data["jobs"]["d"]["p"]), ["1", "2"])
+            self.assertEqual([r["job_id"] for r in store.queue("d", "p")["rows"]], ["9"])
+            self.assertNotIn("p-gpu", store.data["queue"]["d"])
+            self.assertEqual(store.companion("d", "p"), "p-gpu")
+            s = store.summary("d", "p", NOW, gpus_per_node=c.gpus_per_node, accounts=c.accounts_of("p"))
+            self.assertEqual(s["accounts"], ["p", "p-gpu"])
+            self.assertEqual(s["usage"]["30"]["gpu"]["jobs"], 1)
+            self.assertAlmostEqual(s["usage"]["30"]["gpu"]["gpu_h"], 16, delta=0.01)
+            self.assertEqual(s["gpu_quota"]["limit_h"], 100)  # the old companion shares became the GPU quota
+            self.assertEqual(s["pending"]["gpu"]["jobs"], 1)
+            # idempotent, and the marker is untouched: nothing needs re-fetching
+            store.fold_accounts("d", c.account_map)
+            self.assertAlmostEqual(store.oldest("d"), NOW - 90 * 86400)
+
+    def test_new_companion_triggers_a_refetch_once_slurm_confirms_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ProjectStore(Path(tmp) / "p.json", retention_days=90)
+            c = ClusterConfig(name="d", host="d", projects=["p"])
+            # 90 days already covered, only the project itself was ever fetched
+            store.record_poll("d", ["p"], NOW - 7200, [self._row("1", "p", part="main")], [], [], [], window_start=NOW - 90 * 86400)
+            store.fold_accounts("d", c.account_map)  # nothing stored under p-gpu: nothing to move
+            self.assertAlmostEqual(store.oldest("d"), NOW - 90 * 86400)
+            # a poll where Slurm returns nothing for p-gpu (LUMI, Tetralith): no re-fetch
+            store.record_poll("d", c.account_map, NOW - 3600, [self._row("2", "p", part="main")], [], [], [], window_start=NOW - 2 * 86400)
+            self.assertAlmostEqual(store.oldest("d"), NOW - 90 * 86400)
+            self.assertIsNone(store.companion("d", "p"))
+            # the first poll that does return a p-gpu row moves the marker to that poll's window
+            store.record_poll("d", c.account_map, NOW, [self._row("3", "p-gpu")], [], [], [], window_start=NOW - 2 * 86400)
+            self.assertAlmostEqual(store.oldest("d"), NOW - 2 * 86400)
+            self.assertEqual(store.companion("d", "p"), "p-gpu")
+            # and only once
+            store.record_poll("d", c.account_map, NOW + 60, [self._row("4", "p-gpu")], [], [], [], window_start=NOW - 86400)
+            self.assertAlmostEqual(store.oldest("d"), NOW - 2 * 86400)
