@@ -336,22 +336,31 @@ def cmd_projects(args) -> int:
             print("   no data yet: run `omniqueue projects --poll` or leave `omniqueue monitor` running while logged in\n")
             continue
         r, q = p["running"], p["pending"]
-        print(f"   running now: {r['jobs']} jobs on {r['nodes']} nodes ({r['cores']:,.0f} cores) · waiting: {q['jobs']} jobs ({q['cores']:,.0f} cores)")
+        print(f"   CPU now: {r['cpu']['jobs']} jobs on {r['cpu']['nodes']} nodes ({r['cpu']['cores']:,.0f} cores) · waiting: {q['cpu']['jobs']} jobs ({q['cpu']['cores']:,.0f} cores)")
+        if p["has_gpu"]:
+            print(f"   GPU now: {r['gpu']['jobs']} jobs on {r['gpu']['nodes']} nodes ({r['gpu']['gpus']:,.0f} GPUs) · waiting: {q['gpu']['jobs']} jobs ({q['gpu']['gpus']:,.0f} GPUs)"
+                  + (f"   [GPU partitions: {', '.join(p['gpu_partitions'])}]" if p["gpu_partitions"] else ""))
         if p["shares"]:
             fs = p["shares"].get("fairshare")
             print(f"   fairshare: {fs:.3f}" if fs is not None else "   fairshare: n/a", end="")
             print(f" · raw usage {p['shares'].get('raw_usage') or 0:,}")
-        if p["quota"]:
-            qd = p["quota"]
-            print(f"   quota: {qd['used_core_h']:,.0f} / {qd['limit_core_h']:,.0f} core-h used ({qd['window']}, {qd['source']})")
-        print(f"   {'USER':<14} {'RUN CORES':>10} {'7 d core-h':>12} {'30 d core-h':>12} {'jobs/30 d':>10}")
+        for label, qd, unit in (("quota", p["quota"], "core-h"), ("GPU quota", p["gpu_quota"], "GPU-h")):
+            if qd:
+                print(f"   {label}: {qd['used_h']:,.0f} / {qd['limit_h']:,.0f} {unit} used ({qd['window']}, {qd['source']})")
+        u7c, u30c, u30g = p["usage"]["7"]["cpu"]["users"], p["usage"]["30"]["cpu"]["users"], p["usage"]["30"]["gpu"]["users"]
+        gpu_cols = f" {'RUN GPUs':>9} {'30 d GPU-h':>11}" if p["has_gpu"] else ""
+        print(f"   {'USER':<14} {'RUN CORES':>10} {'7 d core-h':>12} {'30 d core-h':>12} {'jobs/30 d':>10}{gpu_cols}")
         for u in p["users"][:15]:
-            u7 = p["usage"]["7"]["users"].get(u, {})
-            u30 = p["usage"]["30"]["users"].get(u, {})
             mark = " <- you" if u == p.get("me") else ""
-            print(f"   {u:<14} {r['users'].get(u, {}).get('cores', 0):>10,.0f} {u7.get('core_h', 0):>12,.0f} "
-                  f"{u30.get('core_h', 0):>12,.0f} {u30.get('jobs', 0):>10}{mark}")
-        print(f"   total 30 d: {p['usage']['30']['core_h']:,.0f} core-h in {p['usage']['30']['jobs']} jobs\n")
+            jobs30 = u30c.get(u, {}).get("jobs", 0) + u30g.get(u, {}).get("jobs", 0)
+            line = (f"   {u:<14} {r['cpu']['users'].get(u, {}).get('cores', 0):>10,.0f} {u7c.get(u, {}).get('core_h', 0):>12,.0f} "
+                    f"{u30c.get(u, {}).get('core_h', 0):>12,.0f} {jobs30:>10}")
+            if p["has_gpu"]:
+                line += f" {r['gpu']['users'].get(u, {}).get('gpus', 0):>9,.0f} {u30g.get(u, {}).get('gpu_h', 0):>11,.0f}"
+            print(line + mark)
+        tot = p["usage"]["30"]
+        print(f"   total 30 d: {tot['cpu']['core_h']:,.0f} core-h in {tot['cpu']['jobs']} CPU jobs"
+              + (f" · {tot['gpu']['gpu_h']:,.0f} GPU-h in {tot['gpu']['jobs']} GPU jobs" if p["has_gpu"] else "") + "\n")
     return 0
 
 
@@ -365,7 +374,7 @@ def cmd_predict(args) -> int:
     if poller is None:
         print("the predictor needs load samples, which the project poll collects: add `projects` to a cluster first")
         return 2
-    req = Request(nodes=args.nodes, hours=args.hours, cores=args.cores, projects=args.project or None,
+    req = Request(nodes=args.nodes, hours=args.hours, cores=args.cores, gpus=args.gpus or 0, projects=args.project or None,
                   clusters=args.cluster or None, partitions=args.partition or None)
     print("experimental: a heuristic estimate, check it against what really happens\n")
     print(explain(predict(req, poller.prediction_data())))
@@ -428,6 +437,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--nodes", "-N", type=int, default=1, help="nodes the job needs (default 1)")
     s.add_argument("--hours", "-t", type=float, default=1.0, help="wall time in hours (default 1)")
     s.add_argument("--cores", "-n", type=int, help="total cores instead of whole nodes")
+    s.add_argument("--gpus", "-G", type=int, default=0, help="GPUs per node; only GPU partitions are considered then")
     s.add_argument("--project", "-A", action="append", help="only these projects (repeatable)")
     s.add_argument("--cluster", "-M", action="append", help="only these clusters (repeatable)")
     s.add_argument("--partition", "-p", action="append", help="only these partitions (repeatable)")

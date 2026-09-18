@@ -40,6 +40,8 @@ class ClusterConfig:
     logo: str | None = None  # image file path or http(s) URL shown on the cluster card
     projects: list[str] = field(default_factory=list)  # Slurm accounts whose usage (all users) is tracked
     project_quotas: dict[str, float] = field(default_factory=dict)  # project -> core-hours per 30 days (optional)
+    project_gpu_quotas: dict[str, float] = field(default_factory=dict)  # project -> GPU-hours per 30 days (optional)
+    gpu_partitions: list[str] = field(default_factory=list)  # partitions counted as GPU; [] = detect from sinfo gres
     project_refresh_seconds: int | None = None  # how often the projects are polled here; None = global default
     nice: int = 0  # the --nice you usually submit with on this cluster (lowers priority; used by the predictor)
 
@@ -146,6 +148,8 @@ host = "tetralith"               # ssh alias
 # logo = "~/Pictures/nsc.png"    # or drop <name>.png/.svg into ~/.config/omniqueue/logos/
 # projects = ["naiss2025-1-23"]  # Slurm accounts to watch: who runs how much, fairshare, quota (all users)
 # project_quotas = { "naiss2025-1-23" = 100000 }   # core-hours per 30 days, when the site does not publish it via sshare
+# project_gpu_quotas = { "naiss2025-1-23" = 2000 } # GPU-hours per 30 days (GPU jobs are counted separately from CPU jobs)
+# gpu_partitions = ["gpu"]       # partitions whose jobs count as GPU jobs; default: those sinfo reports GPUs for
 # project_refresh_seconds = 3600 # poll the projects on this cluster every hour instead of the global 2 h
 # nice = 0                       # the --nice you usually submit with here (the predictor accounts for it)
 
@@ -259,16 +263,17 @@ def config_from_dict(raw: dict) -> Config:
         if unknown:
             raise ConfigError(f"clusters[{i}] ({c['name']}): unknown keys {sorted(unknown)}")
         validate_ssh_options(c.get("ssh_options", []), f"clusters[{i}] ({c['name']}).ssh_options")
-        for key in ("squeue_args", "sacct_args", "load_partitions", "projects"):
+        for key in ("squeue_args", "sacct_args", "load_partitions", "projects", "gpu_partitions"):
             for arg in c.get(key, []):
                 if not isinstance(arg, str) or not _SAFE_VALUE.match(arg):
                     raise ConfigError(f"clusters[{i}] ({c['name']}).{key}: {arg!r} contains characters that are not allowed.")
-        quotas = c.get("project_quotas", {})
-        if not isinstance(quotas, dict):
-            raise ConfigError(f"clusters[{i}] ({c['name']}).project_quotas must be a table of project = core-hours.")
-        for proj, hours in quotas.items():
-            if not isinstance(hours, (int, float)) or hours <= 0:
-                raise ConfigError(f"clusters[{i}] ({c['name']}).project_quotas[{proj!r}] must be a positive number of core-hours.")
+        for key, unit in (("project_quotas", "core-hours"), ("project_gpu_quotas", "GPU-hours")):
+            quotas = c.get(key, {})
+            if not isinstance(quotas, dict):
+                raise ConfigError(f"clusters[{i}] ({c['name']}).{key} must be a table of project = {unit}.")
+            for proj, hours in quotas.items():
+                if not isinstance(hours, (int, float)) or hours <= 0:
+                    raise ConfigError(f"clusters[{i}] ({c['name']}).{key}[{proj!r}] must be a positive number of {unit}.")
         if c.get("project_refresh_seconds") is not None and int(c["project_refresh_seconds"]) < 300:
             raise ConfigError(f"clusters[{i}] ({c['name']}).project_refresh_seconds must be at least 300.")
         clusters.append(ClusterConfig(**c))

@@ -72,6 +72,8 @@ host = "tetralith"          # anything ssh accepts, aliases from ~/.ssh/config i
 # logo = "~/Pictures/nsc.png" # or drop <name>.svg/.png into ~/.config/omniqueue/logos/
 # projects = ["naiss2025-1-23"]                    # watch these Slurm accounts: who runs how much (all users)
 # project_quotas = { "naiss2025-1-23" = 100000 }  # core-hours per 30 days, if sshare does not publish a limit
+# project_gpu_quotas = { "naiss2025-1-23" = 2000 } # GPU-hours per 30 days; GPU jobs are kept apart from CPU jobs
+# gpu_partitions = ["gpu"]                         # which partitions are GPU ones; default: those sinfo reports GPUs for
 # project_refresh_seconds = 3600                  # poll this cluster's projects hourly instead of the global 2 h
 # nice = 0                  # the --nice you usually submit with here (the experimental predictor accounts for it)
 
@@ -155,7 +157,7 @@ network change that dropped the connection.
 | `omniqueue login --force CLUSTER` | reconnect a cluster whose connection is stale |
 | `omniqueue list [--state running] ...` | poll once and print a table to the terminal |
 | `omniqueue projects [--poll]` | who runs how much in your projects, from the stored slow poll (`--poll` asks the clusters now) |
-| `omniqueue predict -N 4 -t 12 [-A proj]` | experimental: rank clusters/partitions by estimated queue wait for such a job |
+| `omniqueue predict -N 4 -t 12 [-G 4] [-A proj]` | experimental: rank clusters/partitions by estimated queue wait for such a job (`-G` GPUs per node: GPU partitions only) |
 | `omniqueue check` | connect to every cluster once and report problems |
 | `omniqueue init [--force]` | write the example config |
 | `omniqueue completion bash\|zsh\|fish` | print a tab-completion script |
@@ -205,7 +207,10 @@ cluster names from your config, `list --state` the job states.
   jobs for a view of each cluster: CPU utilisation, and per partition the node
   states as a bar (idle / mixed / allocated / down), free nodes and free
   physical cores, the time limit, and the queue pressure from *all* users:
-  running jobs, queued jobs and how many nodes they need. Queued jobs counts
+  running jobs, queued jobs and how many nodes they need. Partitions are
+  listed in two groups, CPU and GPU (those `sinfo` reports a `gpu` gres for);
+  the GPU group adds a free GPUs column, counting the GPUs of fully idle nodes
+  against all GPUs in the partition. Queued jobs counts
   array tasks individually, and the nodes needed take the larger of a job's
   node request and its CPU request divided by the partition's CPUs per node,
   since a job submitted with `-n` alone reports one node. Free nodes counts
@@ -288,7 +293,17 @@ overridable per cluster). One card per project sits under the cluster cards:
   poll, with a bar split by user (hover a segment for the number);
 * **last 30 d**: core-hours and jobs of the last 30 (and 7) days, again split
   by user, and a small chart of core-hours per day for the last month;
-* the user legend with each person's 30-day core-hours (you are marked);
+* **CPU and GPU apart**: on a cluster with GPU partitions the card has two
+  pairs of rows. *cpu now / cpu 30 d* count CPU jobs in cores and core-hours,
+  *gpu now / gpu 30 d* count GPU jobs in GPUs and GPU-hours, with their own
+  per-day chart and a GPU quota bar (`project_gpu_quotas`, or the
+  `gres/gpu` group limit from `sshare`). A job is a GPU job when Slurm
+  allocated it GPUs (`AllocTRES` in `sacct`, `%b` in `squeue`) or when it runs
+  on a GPU partition; GPU partitions are those `sinfo` reports a `gpu` gres
+  for, or the `gpu_partitions` list in the cluster entry. The two sides never
+  mix: a GPU job's cores are not added to the CPU figures;
+* the user legend with each person's 30-day core-hours and, where they have
+  any, GPU-hours (you are marked);
 * the project's **fairshare** factor (and yours), from `sshare`;
 * a **quota bar** when a limit is known: `project_quotas` in the config
   (core-hours per rolling 30 days) or, without it, the group limit some sites
@@ -315,6 +330,11 @@ Like everything else, the project poll never opens a connection itself: it
 waits for `omniqueue login` and the card says "not logged in" until then. The
 ↻ button on the card row polls at once.
 
+**Click a card** to see the project's queue as of the last project poll: every
+user's running and waiting jobs with name, state, elapsed bar, limit, nodes,
+cores, GPUs and partition, your own rows in bold. `q` or Esc returns to your
+jobs.
+
 ### Where to submit? (experimental)
 
 Type `experimental` into the search box and a dashed **where to submit?**
@@ -336,8 +356,10 @@ scheduler simulation:
 * **nice**: the `nice` value in the cluster entry doubles the estimate per 5000;
 * **history**: the median wait of your own similar-sized jobs there in the last
   30 days is blended in when it exists;
-* **quota**: a project with fewer core-hours left than the job needs is left
-  out, one that is nearly used is flagged;
+* **quota**: a project with fewer core-hours (GPU-hours for a GPU job) left
+  than the job needs is left out, one that is nearly used is flagged;
+* **GPUs per node** > 0 restricts the candidates to GPU partitions (and
+  excludes those with fewer GPUs per node), 0 to CPU partitions;
 * partitions whose time limit is too short or that are smaller than the job
   are left out; a candidate whose latest load sample is stale gets "low"
   confidence.
@@ -433,15 +455,15 @@ sacct  --noheader --parsable2 --allocations --user="$USER" --starttime=<now - lo
 The cluster load view, only when you ask for it, runs separately:
 
 ```
-sinfo  --noheader --format='%P|%a|%D|%T|%C|%l' [--partition=main,gpu]; echo "@@OMNIQUEUE sinfo rc=$?"; \
+sinfo  --noheader --format='%P|%a|%D|%T|%C|%l|%z|%c|%G' [--partition=main,gpu]; echo "@@OMNIQUEUE sinfo rc=$?"; \
 squeue --noheader --states=RUNNING,PENDING --format='%P|%T|%D|%C' [--partition=main,gpu]; echo "@@OMNIQUEUE squeue_all rc=$?"
 ```
 
 The project poll, every `project_refresh_seconds` per cluster, runs in one round trip:
 
 ```
-squeue --noheader --states=RUNNING,PENDING --account=<projects> --format='%i|%a|%u|%T|%P|%D|%C|%l|%M'; \
-sacct  --noheader --parsable2 --allocations --allusers --accounts=<projects> --starttime=<last poll - 1 d> --format=JobID,Account,User,...; \
+squeue --noheader --states=RUNNING,PENDING --account=<projects> --format='%i|%a|%u|%T|%P|%D|%C|%l|%M|%b|%j'; \
+sacct  --noheader --parsable2 --allocations --allusers --accounts=<projects> --starttime=<last poll - 1 d> --format=JobID,Account,User,...,AllocTRES; \
 sshare --noheader --parsable2 --all --accounts=<projects> --format=Account,User,RawShares,...,FairShare,GrpTRESMins,GrpTRESRaw,TRESRunMins; \
 sinfo ...; squeue --states=RUNNING,PENDING ...          # the same load sample the load view takes
 ```

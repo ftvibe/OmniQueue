@@ -64,9 +64,11 @@ def make_demo_load(cluster: str, rng: random.Random) -> list[dict]:
         "dardel": [("main", 1200, 128, 86400, True), ("shared", 200, 128, 86400, False), ("gpu", 56, 64, 86400, False), ("long", 96, 128, 7 * 86400, False)],
         "lumi": [("standard", 1400, 128, 2 * 86400, True), ("standard-g", 2500, 64, 2 * 86400, False), ("small", 300, 128, 3 * 86400, False), ("debug", 8, 128, 1800, False)],
     }.get(cluster, [("batch", 500, 64, 86400, True)])
+    gpus_per_node = {"gpu": 4, "standard-g": 8}
     out = []
     tpc = 2 if cluster == "lumi" else 1
     for name, nodes, cpn, limit, default in specs:
+        gpn = gpus_per_node.get(name, 0)
         cpn *= tpc
         busy = rng.uniform(0.55, 0.98)
         alloc = int(nodes * busy)
@@ -84,7 +86,8 @@ def make_demo_load(cluster: str, rng: random.Random) -> list[dict]:
                       "other": down * cpn // tpc, "total": nodes * cpn // tpc},
             "jobs": {"running": alloc // rng.randint(1, 4) + 1, "pending": pend},
             "pending_nodes": pend * rng.randint(1, 6), "pending_cpus": pend * cpn, "pending_cores": pend * cpn // tpc,
-            "running_nodes": alloc,
+            "running_nodes": alloc, "gpus_per_node": gpn, "gpu": gpn > 0,
+            "gpus": {"total": nodes * gpn, "idle": idle * gpn},
         })
     return out
 
@@ -183,7 +186,8 @@ def demo_config() -> Config:
                           project_quotas={"naiss2025-1-42": 120000}, nice=0),
             ClusterConfig(name="dardel", host="dardel.pdc.kth.se", color="#e2856c", load_partitions=["main", "gpu"],
                           projects=["naiss2025-3-7"], project_refresh_seconds=3600, nice=2000),
-            ClusterConfig(name="lumi", host="lumi.csc.fi", color="#b39a4b", projects=["project_465000123"]),
+            ClusterConfig(name="lumi", host="lumi.csc.fi", color="#b39a4b", projects=["project_465000123"],
+                          project_gpu_quotas={"project_465000123": 5000}),
             ClusterConfig(name="offline-cluster", host="unreachable.example.org", color="#8fb8b4", projects=["naiss2025-9-9"]),
         ],
         refresh_seconds=30,
@@ -196,16 +200,17 @@ _DEMO_USERS = ["demo", "x_annli", "x_johsm", "x_marle", "x_petbe", "x_saraw", "x
 
 
 def _demo_project_rows(cluster: str, project: str, rng: random.Random, now: float, days: float = 3,
-                       end: float | None = None) -> tuple[list[dict], list[dict]]:
-    """Fabricated sacct rows for the `days` before `end` (default now) plus, when `end`
+                       until: float | None = None) -> tuple[list[dict], list[dict]]:
+    """Fabricated sacct rows for the `days` before `until` (default now) plus, when `until`
     is None, the queue right now, for one project."""
     weights = [0.22, 0.17, 0.13, 0.1, 0.08, 0.07, 0.06, 0.05, 0.04, 0.03, 0.03, 0.02]
     parts = {"tetralith": ("main", 32, 1), "dardel": ("main", 128, 1), "lumi": ("standard", 256, 2)}
+    gpu_parts = {"dardel": ("gpu", 64, 4), "lumi": ("standard-g", 128, 8)}  # partition, cpus/node, gpus/node
     part, cpn, tpc = parts.get(cluster, ("batch", 64, 1))
     sacct: list[dict] = []
     base = rng.randint(100000, 800000)
     n_jobs = max(1, int(days * rng.uniform(3, 7)))
-    upto = end if end is not None else now
+    upto = until if until is not None else now
     for i in range(n_jobs):
         user = rng.choices(_DEMO_USERS, weights)[0]
         nodes = rng.choice([1, 1, 1, 1, 2, 2, 4, 8])
@@ -217,34 +222,46 @@ def _demo_project_rows(cluster: str, project: str, rng: random.Random, now: floa
         if end > now:
             state, end = "RUNNING", None
         ts = lambda t: time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(t))  # noqa: E731
+        job_part, job_cpn, gpus = part, cpn, 0
+        if cluster in gpu_parts and rng.random() < 0.3:  # some GPU jobs on the GPU partition
+            job_part, job_cpn, gpn = gpu_parts[cluster]
+            nodes = min(nodes, 2)
+            gpus = nodes * gpn
         sacct.append({
-            "job_id": str(base + i), "account": project, "user": user, "partition": part, "state": state,
-            "nodes": nodes, "cpus": nodes * cpn, "elapsed_s": int((now if end is None else end) - start), "cpu_s": 0,
+            "job_id": str(base + i), "account": project, "user": user, "partition": job_part, "state": state, "gpus": gpus,
+            "nodes": nodes, "cpus": nodes * job_cpn, "elapsed_s": int((now if end is None else end) - start), "cpu_s": 0,
             "submit": ts(start - rng.uniform(60, 6 * 3600)), "start": ts(start), "end": ts(end) if end else "",
             "time_limit_s": int(hours * 3600),
         })
     queue: list[dict] = []
-    if end is not None:
+    if until is not None:
         return sacct, queue
     for r in sacct:
         if r["state"] == "RUNNING":
-            queue.append({"job_id": r["job_id"], "account": project, "user": r["user"], "state": "RUNNING", "partition": part,
-                          "nodes": r["nodes"], "cpus": r["cpus"], "time_limit_s": r["time_limit_s"], "elapsed_s": r["elapsed_s"], "tasks": 1})
+            queue.append({"job_id": r["job_id"], "account": project, "user": r["user"], "state": "RUNNING", "partition": r["partition"],
+                          "nodes": r["nodes"], "cpus": r["cpus"], "time_limit_s": r["time_limit_s"], "elapsed_s": r["elapsed_s"],
+                          "tasks": 1, "gpus": r["gpus"], "name": f"{rng.choice(_NAMES)}-{rng.randint(1, 40):02d}"})
     for i in range(rng.randint(2, 9)):
         user = rng.choices(_DEMO_USERS, weights)[0]
         nodes = rng.choice([1, 2, 4, 8])
         tasks = rng.choice([1, 1, 1, 20, 50])
         queue.append({"job_id": f"{base + n_jobs + i}" + (f"_[1-{tasks}]" if tasks > 1 else ""), "account": project, "user": user,
                       "state": "PENDING", "partition": part, "nodes": nodes, "cpus": nodes * cpn, "time_limit_s": 4 * 3600,
-                      "elapsed_s": 0, "tasks": tasks})
+                      "elapsed_s": 0, "tasks": tasks, "gpus": 0, "name": f"{rng.choice(_NAMES)}-{rng.randint(1, 40):02d}"})
+    if cluster in gpu_parts:
+        gpart, gcpn, gpn = gpu_parts[cluster]
+        queue.append({"job_id": str(base + n_jobs + 50), "account": project, "user": rng.choice(_DEMO_USERS[:4]), "state": "PENDING",
+                      "partition": gpart, "nodes": 1, "cpus": gcpn, "time_limit_s": 8 * 3600, "elapsed_s": 0, "tasks": 1, "gpus": gpn,
+                      "name": "train-gpu"})
     return sacct, queue
 
 
 def _demo_sshare(project: str, rng: random.Random) -> list[dict]:
     rows = [{"account": project, "user": "", "raw_shares": 1, "norm_shares": 0.01, "raw_usage": rng.randint(2_000_000, 9_000_000),
              "effective_usage": rng.uniform(0.005, 0.02), "fairshare": rng.uniform(0.2, 0.9),
-             "grp_tres_mins": {"cpu": 100000 * 60} if project.startswith("naiss2025-3") else {},
-             "grp_tres_raw": {"cpu": rng.randint(20000, 80000) * 60} if project.startswith("naiss2025-3") else {}, "tres_run_mins": {}}]
+             "grp_tres_mins": {"cpu": 100000 * 60, "gres/gpu": 3000 * 60} if project.startswith("naiss2025-3") else {},
+             "grp_tres_raw": {"cpu": rng.randint(20000, 80000) * 60, "gres/gpu": rng.randint(500, 2500) * 60} if project.startswith("naiss2025-3") else {},
+             "tres_run_mins": {}}]
     for u in _DEMO_USERS:
         rows.append({"account": project, "user": u, "raw_shares": 1, "norm_shares": 0.002, "raw_usage": rng.randint(10000, 3_000_000),
                      "effective_usage": rng.uniform(0.0005, 0.005), "fairshare": rng.uniform(0.1, 0.95),
@@ -272,7 +289,7 @@ class DemoProjectPoller(ProjectPoller):
         for proj in cluster.projects:
             if proj == "naiss2025-22-8":
                 continue
-            rows += _demo_project_rows(cluster.name, proj, self._rng, time.time(), days=(end_ts - start_ts) / 86400, end=end_ts)[0]
+            rows += _demo_project_rows(cluster.name, proj, self._rng, time.time(), days=(end_ts - start_ts) / 86400, until=end_ts)[0]
         return rows
 
     def fetch(self, cluster: ClusterConfig, start_ts: float):

@@ -15,7 +15,11 @@ checked against reality and tuned:
   the front of the pending list, 0.0 to the back.
 * **nice** - the ``--nice`` you usually submit with on that cluster (lower priority).
 * **history** - the median wait your own similar-sized jobs actually had there.
-* **quota** - a project with too few core-hours left is excluded or flagged.
+* **quota** - a project with too few core-hours (GPU-hours for a GPU job) left is
+  excluded or flagged.
+
+GPU jobs (``gpus > 0``) are only matched against GPU partitions, CPU jobs only
+against CPU partitions, unless partitions are named explicitly.
 """
 
 from __future__ import annotations
@@ -37,6 +41,7 @@ class Request:
     nodes: int = 1
     hours: float = 1.0
     cores: int | None = None  # total cores wanted; None = whole nodes
+    gpus: int = 0  # GPUs per node; > 0 restricts the search to GPU partitions, 0 to CPU partitions
     projects: list[str] | None = None  # restrict to these Slurm accounts
     clusters: list[str] | None = None  # restrict to these clusters
     partitions: list[str] | None = None  # restrict to these partitions
@@ -102,6 +107,9 @@ def predict(request: Request, data: dict[str, Any]) -> dict[str, Any]:
         for pname, part in cl["partitions"].items():
             if request.partitions and pname not in request.partitions:
                 continue
+            is_gpu = bool(part.get("gpu"))
+            if not request.partitions and is_gpu != (request.gpus > 0):
+                continue  # GPU jobs only go to GPU partitions and CPU jobs only to CPU ones
             samples = [s for s in part.get("samples", []) if s.get("ts")]
             if not samples:
                 continue
@@ -124,6 +132,12 @@ def predict(request: Request, data: dict[str, Any]) -> dict[str, Any]:
                 for proj in proj_names:
                     excluded.append(Candidate(cname, pname, proj, None, 0.0, "good",
                                               excluded=f"only {total_nodes} nodes in the partition"))
+                continue
+            gpn = int(part.get("gpus_per_node") or 0)
+            if request.gpus and gpn and request.gpus > gpn:
+                for proj in proj_names:
+                    excluded.append(Candidate(cname, pname, proj, None, 0.0, "good",
+                                              excluded=f"only {gpn} GPUs per node"))
                 continue
             free_hits = sum(1 for s in recent if (s.get("idle") or 0) >= nodes_needed)
             p_free = free_hits / len(recent)
@@ -164,14 +178,16 @@ def predict(request: Request, data: dict[str, Any]) -> dict[str, Any]:
                 if nice:
                     reasons.append(f"--nice {nice} (x{nice_factor:.2f})")
                 exclusion = None
-                quota = pinfo.get("quota") if proj else None
-                if quota and quota.get("limit_core_h"):
-                    remaining = quota["limit_core_h"] - quota.get("used_core_h", 0)
-                    need = (request.cores or nodes_needed * (cpn or 1)) * request.hours
+                if request.gpus:
+                    quota, unit, need = pinfo.get("gpu_quota") if proj else None, "GPU-h", request.gpus * nodes_needed * request.hours
+                else:
+                    quota, unit, need = pinfo.get("quota") if proj else None, "core-h", (request.cores or nodes_needed * (cpn or 1)) * request.hours
+                if quota and quota.get("limit_h"):
+                    remaining = quota["limit_h"] - quota.get("used_h", 0)
                     if remaining < need:
-                        exclusion = f"quota: {remaining:,.0f} core-h left, job needs {need:,.0f}"
+                        exclusion = f"quota: {remaining:,.0f} {unit} left, job needs {need:,.0f}"
                     elif remaining < 3 * need:
-                        reasons.append(f"quota nearly used: {remaining:,.0f} core-h left")
+                        reasons.append(f"quota nearly used: {remaining:,.0f} {unit} left")
                         est *= 1.05
                 if stale:
                     reasons.append("load sample is stale")
@@ -183,7 +199,7 @@ def predict(request: Request, data: dict[str, Any]) -> dict[str, Any]:
                              "fairshare": fs, "fairshare_factor": round(fs_factor, 2), "nice": nice,
                              "nice_factor": round(nice_factor, 2), "history_wait_h": hist_wait_h,
                              "history_n": len(waits), "samples": len(recent), "nodes_needed": nodes_needed,
-                             "model_wait_h": round(model_wait, 2)},
+                             "model_wait_h": round(model_wait, 2), "gpu": is_gpu, "gpus_per_node": gpn},
                     reasons=reasons, excluded=exclusion)
                 (excluded if exclusion else cands).append(cand)
     cands.sort(key=lambda c: (c.estimated_wait_h, -c.immediate_probability, c.cluster, c.partition))
@@ -195,7 +211,8 @@ def explain(result: dict[str, Any], limit: int = 8) -> str:
     """Plain-text ranking for the terminal."""
     lines = []
     req = result["request"]
-    lines.append(f"job: {req['nodes']} node(s), {req['hours']:g} h" + (f", {req['cores']} cores" if req.get("cores") else ""))
+    lines.append(f"job: {req['nodes']} node(s), {req['hours']:g} h" + (f", {req['cores']} cores" if req.get("cores") else "")
+                 + (f", {req['gpus']} GPU(s) per node" if req.get("gpus") else ""))
     if not result["candidates"]:
         lines.append("no candidates: no load samples yet? (projects must be configured and polled once)")
     for i, c in enumerate(result["candidates"][:limit], 1):

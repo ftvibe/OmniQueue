@@ -87,7 +87,7 @@ MARK = "@@OMNIQUEUE"
 
 
 # cluster load: node states per partition and queue pressure from all users
-SINFO_FIELDS = "%P|%a|%D|%T|%C|%l|%z|%c"  # partition, avail, nodes, state, cpus A/I/O/T, time limit, S:C:T, cpus/node
+SINFO_FIELDS = "%P|%a|%D|%T|%C|%l|%z|%c|%G"  # partition, avail, nodes, state, cpus A/I/O/T, time limit, S:C:T, cpus/node, gres
 SQUEUE_ALL_FIELDS = "%i|%P|%T|%D|%C"  # job id (arrays as ranges), partition, state, nodes, cpus (every user)
 
 
@@ -166,6 +166,8 @@ def parse_load(sinfo_out: str, squeue_all_out: str) -> list[dict]:
             "cpus": {"allocated": 0, "idle": 0, "other": 0, "total": 0},
             "threads_per_core": 1,  # >1 when Slurm counts hyperthreads as CPUs (e.g. LUMI: 2)
             "cpus_per_node": 0,  # largest node size seen in the partition (Slurm CPUs)
+            "gpus_per_node": 0,  # from the gres column (gpu:4, gpu:a100:4 ...); 0 = a CPU partition
+            "gpu": False,
             "cores": {"allocated": 0, "idle": 0, "other": 0, "total": 0},
             "jobs": {"running": 0, "pending": 0},
             "pending_nodes": 0, "pending_cpus": 0, "running_nodes": 0,
@@ -178,9 +180,12 @@ def parse_load(sinfo_out: str, squeue_all_out: str) -> list[dict]:
         raw_name, avail, nodes, state, cpus, limit = (c.strip() for c in cols[:6])
         sct = cols[6].strip() if len(cols) > 6 else ""
         cpn = cols[7].strip() if len(cols) > 7 else ""
+        gres = cols[8].strip() if len(cols) > 8 else ""
         name = raw_name.rstrip("*")
         p = part(name)
         p["cpus_per_node"] = max(p["cpus_per_node"], _int(cpn.rstrip("+")))
+        p["gpus_per_node"] = max(p["gpus_per_node"], gpus_from_gres(gres))
+        p["gpu"] = p["gpus_per_node"] > 0
         try:  # %z is sockets:cores:threads; the thread count says what a Slurm CPU is
             tpc = int(sct.split(":")[2])
             if tpc > 1:
@@ -229,10 +234,44 @@ def parse_load(sinfo_out: str, squeue_all_out: str) -> list[dict]:
                 p["pending_cpus"] += _int(cpus) * count
     for p in parts.values():
         p["pending_cores"] = p["pending_cpus"] // p["threads_per_core"]
+        p["gpus"] = {"total": p["nodes"]["total"] * p["gpus_per_node"],
+                     "idle": p["nodes"]["idle"] * p["gpus_per_node"]}  # whole idle nodes only; mixed nodes unknown
 
     out = list(parts.values())
     out.sort(key=lambda p: (not p["default"], p["partition"]))
     return out
+
+
+_GRES_GPU_RE = re.compile(r"(?:gres/)?gpu(?::[A-Za-z0-9_.-]+)?[:=](?P<n>\d+)")
+
+
+def gpus_from_gres(text: str) -> int:
+    """GPUs per node from a gres string: ``gpu:4``, ``gpu:a100:4``, ``gres/gpu:4``,
+    ``gpu:a100:4(S:0-1)``, ``gpu:4,mps:400`` -> 4; ``(null)``, ``N/A`` -> 0."""
+    if not text:
+        return 0
+    return max((int(m.group("n")) for m in _GRES_GPU_RE.finditer(text)), default=0)
+
+
+def gpus_from_tres(text: str) -> int:
+    """Allocated GPUs of a job from an AllocTRES string such as
+    ``billing=128,cpu=128,gres/gpu=4,gres/gpu:a100=4,mem=200G,node=1``.
+    The typeless ``gres/gpu=`` entry is authoritative; typed entries are summed otherwise."""
+    if not text:
+        return 0
+    typed = 0
+    for chunk in text.split(","):
+        key, sep, val = chunk.partition("=")
+        if not sep or not key.startswith("gres/gpu"):
+            continue
+        try:
+            n = int(float(val))
+        except ValueError:
+            continue
+        if key == "gres/gpu":
+            return n
+        typed += n
+    return typed
 
 
 _ARRAY_RE = re.compile(r"_\[(?P<spec>[^\]]+)\]$")
@@ -464,9 +503,9 @@ def merge_jobs(squeue_jobs: list[Job], sacct_jobs: list[Job]) -> list[Job]:
 # squeue for every job of the configured projects: id, account, user, state, partition,
 # nodes, cpus, time limit, elapsed.  sacct for the finished/running ones; CPUTimeRAW is
 # elapsed x allocated CPUs in seconds (Slurm CPUs: threads on hyperthreaded clusters).
-PROJECT_SQUEUE_FIELDS = "%i|%a|%u|%T|%P|%D|%C|%l|%M"
+PROJECT_SQUEUE_FIELDS = "%i|%a|%u|%T|%P|%D|%C|%l|%M|%b|%j"  # %b: gres per node (gpu:4); %j (name) last
 PROJECT_SACCT_FIELDS = ["JobID", "Account", "User", "Partition", "State", "AllocNodes", "AllocCPUS",
-                        "ElapsedRaw", "CPUTimeRAW", "Submit", "Start", "End", "Timelimit"]
+                        "ElapsedRaw", "CPUTimeRAW", "Submit", "Start", "End", "Timelimit", "AllocTRES"]
 SSHARE_FIELDS = ["Account", "User", "RawShares", "NormShares", "RawUsage", "EffectvUsage", "FairShare",
                  "GrpTRESMins", "GrpTRESRaw", "TRESRunMins"]
 
@@ -515,11 +554,14 @@ def parse_project_queue(output: str) -> list[dict]:
         if len(cols) < 9 or not cols[0]:
             continue
         job_id, account, user, state, partition, nodes, cpus, limit, elapsed = cols[:9]
+        gres = cols[9] if len(cols) > 9 else ""
         rows.append({
             "job_id": job_id, "account": account, "user": user, "state": normalize_state(state),
             "partition": partition, "nodes": _int(nodes), "cpus": _int(cpus),
             "time_limit_s": parse_duration(limit), "elapsed_s": parse_duration(elapsed) or 0,
             "tasks": array_task_count(job_id),
+            "gpus": gpus_from_gres(gres) * max(1, _int(nodes)),  # %b is per node
+            "name": "|".join(cols[10:]) if len(cols) > 10 else "",  # last field, may contain |
         })
     return rows
 
@@ -532,12 +574,13 @@ def parse_project_sacct(output: str) -> list[dict]:
         if len(cols) < 13 or not cols[0]:
             continue
         job_id, account, user, partition, state, nodes, cpus, elapsed, cputime, submit, start, end, limit = cols[:13]
+        tres = cols[13] if len(cols) > 13 else ""
         rows.append({
             "job_id": job_id, "account": account, "user": user, "partition": partition,
             "state": normalize_state(state), "nodes": _int(nodes), "cpus": _int(cpus),
             "elapsed_s": _int(elapsed), "cpu_s": _int(cputime),
             "submit": _clean_time(submit), "start": _clean_time(start), "end": _clean_time(end),
-            "time_limit_s": parse_duration(limit),
+            "time_limit_s": parse_duration(limit), "gpus": gpus_from_tres(tres),
         })
     return rows
 

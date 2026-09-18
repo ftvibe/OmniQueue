@@ -123,7 +123,8 @@ kbd { font: 11px var(--mono); background: var(--surface-2); border: 1px solid va
 .pmini .w-cpill { font-size: 11px; }
 .proj-title .muted { font-weight: 400; margin-left: 6px; }
 .proj-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 12px; align-items: stretch; }
-.pcard { cursor: default; min-height: 0; gap: 8px; }
+.pcard { cursor: pointer; min-height: 0; gap: 8px; }
+.pcard:hover { border-color: var(--accent); border-left-color: var(--card-color); }
 .pcard-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .pcard-head b { font-size: 15px; }
 .pcard-head small { margin-left: auto; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -139,14 +140,31 @@ kbd { font: 11px var(--mono); background: var(--surface-2); border: 1px solid va
 .pday { flex: 1; display: flex; flex-direction: column-reverse; height: 100%; min-width: 0; }
 .pday i { display: block; width: 100%; min-height: 1px; }
 .pday i + i { border-top: 1px solid var(--surface); }
+.pchart-label { font-size: 10px; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); margin-top: 4px; }
+.pdaily.gpu { height: 32px; }
 .pusers { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--ink-2); }
+.puser small.gpu { color: var(--pending); }
+.puser small.gpu::before { content: "· "; color: var(--muted); }
 .puser { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
 .puser i { width: 10px; height: 10px; border-radius: 2px; flex: none; box-shadow: inset 0 0 0 1px rgba(0,0,0,.15); }
 .pusers.many { gap: 3px 10px; font-size: 11.5px; }
 .puser small { color: var(--muted); font-variant-numeric: tabular-nums; }
 .puser.me { font-weight: 700; color: var(--ink); }
 .pquota { display: inline-flex; align-items: center; gap: 8px; }
+.pcard .card-foot { flex-wrap: wrap; justify-content: flex-start; gap: 6px 16px; }
 .pquota .gauge-bar { width: 90px; height: 8px; }
+
+/* ---- project view: one project's queue ---- */
+.project-view { padding: 12px 20px 24px; }
+.project-title { display: inline-flex; align-items: center; gap: 8px; font-size: 15px; }
+.project-title .w-cpill { font-size: 12px; line-height: 20px; padding: 0 9px; }
+#project-jobs tbody tr:hover { cursor: default; }
+#project-jobs tr.me td { font-weight: 600; }
+#project-jobs td.gpu { color: var(--pending); font-weight: 600; }
+#project-jobs .puser { font-size: 13px; }
+.parts .group-row th { text-transform: none; letter-spacing: 0; font-size: 12.5px; color: var(--ink); background: color-mix(in srgb, var(--surface-2) 60%, var(--surface)); padding: 6px 10px; }
+table.parts.gpu { border-top: 1px solid var(--border); }
+.array-tag.gpu { color: var(--pending); border-color: var(--pending); }
 
 /* ---- experimental: where to submit? ---- */
 .exp-badge { display: inline-block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px; color: var(--pending); border: 1px solid var(--pending); border-radius: 999px; padding: 0 8px; margin-right: 6px; }

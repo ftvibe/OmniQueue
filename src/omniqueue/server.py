@@ -216,6 +216,7 @@ class Handler(BaseHTTPRequestHandler):
                 nodes=max(1, int(body.get("nodes", 1))),
                 hours=max(0.01, float(body.get("hours", 1))),
                 cores=(max(1, int(body["cores"])) if body.get("cores") else None),
+                gpus=max(0, int(body.get("gpus") or 0)),
                 projects=[str(x)[:64] for x in body["projects"]][:32] if isinstance(body.get("projects"), list) and body["projects"] else None,
                 clusters=[str(x)[:64] for x in body["clusters"]][:32] if isinstance(body.get("clusters"), list) and body["clusters"] else None,
                 partitions=[str(x)[:64] for x in body["partitions"]][:32] if isinstance(body.get("partitions"), list) and body["partitions"] else None,

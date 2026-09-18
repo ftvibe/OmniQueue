@@ -21,16 +21,19 @@ def _t(hours_ago: float) -> str:
 
 
 QUEUE_OUT = f"""\
-501|proj-a|alice|RUNNING|main|4|128|1-00:00:00|3:10:00
-502|proj-a|bob|PENDING|main|2|64|12:00:00|0:00
-503_[1-20]|proj-a|bob|PENDING|main|1|32|4:00:00|0:00
-504|proj-b|carol|RUNNING|main|1|32|1:00:00|0:30:00
+501|proj-a|alice|RUNNING|main|4|128|1-00:00:00|3:10:00|N/A|vasp-relax
+502|proj-a|bob|PENDING|main|2|64|12:00:00|0:00|N/A|qe|scf
+503_[1-20]|proj-a|bob|PENDING|main|1|32|4:00:00|0:00|N/A|sweep
+504|proj-b|carol|RUNNING|main|1|32|1:00:00|0:30:00|N/A|other
+505|proj-a|dave|RUNNING|gpu|1|16|4:00:00|1:00:00|gpu:a100:2|train
 """
 SACCT_OUT = f"""\
-401|proj-a|alice|main|COMPLETED|2|64|7200|460800|{_t(30)}|{_t(29)}|{_t(27)}|04:00:00
-402|proj-a|bob|main|FAILED|1|32|3600|115200|{_t(10)}|{_t(9)}|{_t(8)}|02:00:00
-501|proj-a|alice|main|RUNNING|4|128|11400|1459200|{_t(5)}|{_t(3.17)}|Unknown|1-00:00:00
-403|proj-a|alice|main|COMPLETED|1|32|36000|1152000|{_t(900)}|{_t(890)}|{_t(880)}|12:00:00
+401|proj-a|alice|main|COMPLETED|2|64|7200|460800|{_t(30)}|{_t(29)}|{_t(27)}|04:00:00|billing=64,cpu=64,mem=100G,node=2
+402|proj-a|bob|main|FAILED|1|32|3600|115200|{_t(10)}|{_t(9)}|{_t(8)}|02:00:00|cpu=32,node=1
+501|proj-a|alice|main|RUNNING|4|128|11400|1459200|{_t(5)}|{_t(3.17)}|Unknown|1-00:00:00|cpu=128,node=4
+403|proj-a|alice|main|COMPLETED|1|32|36000|1152000|{_t(900)}|{_t(890)}|{_t(880)}|12:00:00|cpu=32,node=1
+505|proj-a|dave|gpu|RUNNING|1|16|3600|57600|{_t(2)}|{_t(1)}|Unknown|04:00:00|cpu=16,gres/gpu=2,gres/gpu:a100=2,node=1
+406|proj-a|dave|gpu|COMPLETED|1|32|7200|230400|{_t(50)}|{_t(48)}|{_t(46)}|04:00:00|cpu=32,gres/gpu=4,node=1
 """
 SSHARE_OUT = """\
 proj-a||1|0.010000|3000000|0.012000|0.612345|cpu=6000000|cpu=1800000|cpu=0
@@ -38,10 +41,12 @@ proj-a||1|0.010000|3000000|0.012000|0.612345|cpu=6000000|cpu=1800000|cpu=0
  proj-a|bob|1|0.005000|1000000|0.004000|0.812345|||
 """
 SINFO_OUT = """\
-main*|up|10|allocated|320/0/0/320|1-00:00:00|2:16:1|32
-main*|up|3|idle|0/96/0/96|1-00:00:00|2:16:1|32
+main*|up|10|allocated|320/0/0/320|1-00:00:00|2:16:1|32|(null)
+main*|up|3|idle|0/96/0/96|1-00:00:00|2:16:1|32|(null)
+gpu|up|2|mixed|16/48/0/64|1-00:00:00|2:16:1|32|gpu:a100:4
+gpu|up|1|idle|0/32/0/32|1-00:00:00|2:16:1|32|gpu:a100:4
 """
-SQUEUE_ALL_OUT = "501|main|RUNNING|4|128\n502|main|PENDING|2|64\n503_[1-20]|main|PENDING|1|32\n"
+SQUEUE_ALL_OUT = "501|main|RUNNING|4|128\n502|main|PENDING|2|64\n503_[1-20]|main|PENDING|1|32\n505|gpu|RUNNING|1|16\n"
 
 
 class ParserTests(unittest.TestCase):
@@ -61,17 +66,23 @@ class ParserTests(unittest.TestCase):
 
     def test_queue(self):
         rows = parse_project_queue(QUEUE_OUT)
-        self.assertEqual(len(rows), 4)
+        self.assertEqual(len(rows), 5)
         self.assertEqual(rows[2]["tasks"], 20)
         self.assertEqual(rows[0]["time_limit_s"], 86400)
         self.assertEqual(rows[0]["elapsed_s"], 3 * 3600 + 600)
+        self.assertEqual(rows[0]["name"], "vasp-relax")
+        self.assertEqual(rows[1]["name"], "qe|scf")  # name is the last field, pipes survive
+        self.assertEqual(rows[0]["gpus"], 0)
+        self.assertEqual(rows[4]["gpus"], 2)
 
     def test_sacct(self):
         rows = parse_project_sacct(SACCT_OUT)
-        self.assertEqual(len(rows), 4)
+        self.assertEqual(len(rows), 6)
         self.assertEqual(rows[0]["cpu_s"], 460800)
         self.assertEqual(rows[2]["end"], "")  # Unknown -> empty
         self.assertEqual(rows[2]["state"], "RUNNING")
+        self.assertEqual(rows[4]["gpus"], 2)  # gres/gpu= wins over the typed entry
+        self.assertEqual(rows[0]["gpus"], 0)
 
     def test_sshare(self):
         rows = parse_sshare(SSHARE_OUT)
@@ -94,27 +105,45 @@ class StoreTests(unittest.TestCase):
     def test_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = self._store(tmp)
-            s = store.summary("c1", "proj-a", NOW, me="alice", quota_core_h=10000)
-            # 7-day window: job 401 (2 h x 64), 402 (1 h x 32), the running 501 (3.17 h x 128)
-            self.assertAlmostEqual(s["usage"]["7"]["users"]["alice"]["core_h"], 2 * 64 + 3.17 * 128, delta=1)
-            self.assertAlmostEqual(s["usage"]["7"]["users"]["bob"]["core_h"], 32, delta=0.5)
-            self.assertEqual(s["usage"]["7"]["jobs"], 3)
-            self.assertEqual(s["usage"]["30"]["jobs"], 3)  # job 403 is 37 days old
-            self.assertEqual(s["running"], {"jobs": 1, "cores": 128.0, "nodes": 4, "users": {"alice": {"jobs": 1, "cores": 128.0}}})
-            self.assertEqual(s["pending"]["jobs"], 21)  # 1 + 20 array tasks
-            self.assertEqual(s["pending"]["cores"], 64 + 20 * 32)
+            s = store.summary("c1", "proj-a", NOW, me="alice", quota_core_h=10000, quota_gpu_h=500)
+            cpu7, gpu7 = s["usage"]["7"]["cpu"], s["usage"]["7"]["gpu"]
+            # 7-day window, CPU side: job 401 (2 h x 64), 402 (1 h x 32), the running 501 (3.17 h x 128)
+            self.assertAlmostEqual(cpu7["users"]["alice"]["core_h"], 2 * 64 + 3.17 * 128, delta=1)
+            self.assertAlmostEqual(cpu7["users"]["bob"]["core_h"], 32, delta=0.5)
+            self.assertEqual(cpu7["jobs"], 3)
+            self.assertEqual(s["usage"]["30"]["cpu"]["jobs"], 3)  # job 403 is 37 days old
+            # GPU side: 406 (2 h x 4 GPUs) and the running 505 (1 h x 2 GPUs), kept apart from the CPU numbers
+            self.assertEqual(gpu7["jobs"], 2)
+            self.assertAlmostEqual(gpu7["gpu_h"], 8 + 2, delta=0.05)
+            self.assertAlmostEqual(gpu7["users"]["dave"]["gpu_h"], 10, delta=0.05)
+            self.assertNotIn("dave", cpu7["users"])
+            self.assertEqual(s["gpu_partitions"], ["gpu"])
+            self.assertTrue(s["has_gpu"])
+            self.assertEqual(s["running"]["cpu"], {"jobs": 1, "cores": 128.0, "nodes": 4, "users": {"alice": {"jobs": 1, "cores": 128.0}}})
+            self.assertEqual(s["running"]["gpu"]["jobs"], 1)
+            self.assertEqual(s["running"]["gpu"]["gpus"], 2)
+            self.assertEqual(s["pending"]["cpu"]["jobs"], 21)  # 1 + 20 array tasks
+            self.assertEqual(s["pending"]["cpu"]["cores"], 64 + 20 * 32)
             self.assertEqual(s["users"][0], "alice")
             self.assertAlmostEqual(s["shares"]["fairshare"], 0.612345)
             self.assertAlmostEqual(s["shares"]["users"]["alice"]["fairshare"], 0.412345)
             self.assertEqual(s["quota"]["source"], "config")
-            self.assertAlmostEqual(s["quota"]["used_core_h"], s["usage"]["30"]["core_h"])
+            self.assertAlmostEqual(s["quota"]["used_h"], s["usage"]["30"]["cpu"]["core_h"])
+            self.assertEqual(s["gpu_quota"]["limit_h"], 500)
+            self.assertAlmostEqual(s["gpu_quota"]["used_h"], 10, delta=0.05)
             self.assertEqual(len(s["daily"]), 30)
             self.assertGreater(s["daily"][-1]["core_h"], 0)
+            self.assertGreater(s["daily"][-1]["gpu_h"], 0)
+            # the project's own queue is listed, running first, with the job names
+            self.assertEqual([r["job_id"] for r in s["jobs_now"]], ["501", "505", "502", "503_[1-20]"])
+            self.assertEqual(s["jobs_now"][1]["kind"], "gpu")
+            self.assertEqual(s["jobs_now"][0]["name"], "vasp-relax")
             # without a configured quota the sshare group limit is used
             s2 = store.summary("c1", "proj-a", NOW)
             self.assertEqual(s2["quota"]["source"], "sshare")
-            self.assertEqual(s2["quota"]["limit_core_h"], 100000)
-            self.assertEqual(s2["quota"]["used_core_h"], 30000)
+            self.assertEqual(s2["quota"]["limit_h"], 100000)
+            self.assertEqual(s2["quota"]["used_h"], 30000)
+            self.assertIsNone(s2["gpu_quota"])
 
     def test_persist_prune_and_load_samples(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -123,11 +152,14 @@ class StoreTests(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(os.stat(Path(tmp) / "p.json").st_mode), 0o600)
             again = ProjectStore(Path(tmp) / "p.json", retention_days=90)
             self.assertEqual(again.last_poll("c1"), NOW)
-            self.assertEqual(set(again.jobs("c1", "proj-a")), {"401", "402", "501", "403"})
+            self.assertEqual(set(again.jobs("c1", "proj-a")), {"401", "402", "501", "403", "505", "406"})
             samples = again.load_samples("c1")["main"]
             self.assertEqual(len(samples), 1)
             self.assertEqual(samples[0]["idle"], 3)
             self.assertEqual(samples[0]["pending_nodes"], 2 + 20)
+            self.assertEqual(samples[0]["gpus_per_node"], 0)
+            self.assertEqual(again.load_samples("c1")["gpu"][0]["gpus_per_node"], 4)
+            self.assertEqual(again.gpn_map("c1"), {"main": 0, "gpu": 4})
             self.assertEqual(again.typical_hours("c1", "main"), 2.0)  # median of 2 h, 1 h, 10 h
             # a poll 100 days later prunes the old jobs and samples
             again.record_poll("c1", ["proj-a"], NOW + 100 * 86400, [], [], [], [])
@@ -186,8 +218,9 @@ class PollerTests(unittest.TestCase):
         proj = snap["projects"][0]
         self.assertEqual(proj["project"], "proj-a")
         self.assertEqual(proj["me"], "alice")
-        self.assertEqual(proj["running"]["jobs"], 1)
-        self.assertEqual(proj["quota"]["limit_core_h"], 5000)
+        self.assertEqual(proj["running"]["cpu"]["jobs"], 1)
+        self.assertEqual(proj["running"]["gpu"]["jobs"], 1)
+        self.assertEqual(proj["quota"]["limit_h"], 5000)
         self.assertTrue((Path(self.tmp.name) / "p.json").exists())
         # the request for a refresh makes it due at once and bumps the etag
         etag = poller.etag()
@@ -239,7 +272,11 @@ class PollerTests(unittest.TestCase):
         self.assertEqual(here["nice"], 1000)
         self.assertEqual(here["partitions"]["main"]["total_nodes"], 13)
         self.assertEqual(here["partitions"]["main"]["cores_per_node"], 32)
+        self.assertFalse(here["partitions"]["main"]["gpu"])
+        self.assertTrue(here["partitions"]["gpu"]["gpu"])
+        self.assertEqual(here["partitions"]["gpu"]["gpus_per_node"], 4)
         self.assertAlmostEqual(here["projects"]["proj-a"]["fairshare_me"], 0.412345)
+        self.assertEqual(here["projects"]["proj-a"]["running_gpus"], 2)
 
     def test_disabled_without_projects(self):
         cfg = Config(clusters=[ClusterConfig(name="here", host="local")], data_dir=Path(self.tmp.name), persist_connections=False)
@@ -267,10 +304,10 @@ class ConfigTests(unittest.TestCase):
             config_from_dict({"project_refresh_seconds": 10, "clusters": [{"name": "a", "host": "a"}]})
 
 
-def _samples(n, idle, pending_nodes, total=100, step=7200, tpc=1):
+def _samples(n, idle, pending_nodes, total=100, step=7200, tpc=1, gpn=0):
     return [{"ts": NOW - k * step, "idle": idle, "mixed": 0, "allocated": total - idle, "unavailable": 0, "total": total,
              "free_cores": idle * 32, "total_cores": total * 32, "pending_jobs": pending_nodes, "pending_nodes": pending_nodes,
-             "running_jobs": 10, "time_limit_s": 3 * 86400, "tpc": tpc, "cpus_per_node": 32 * tpc} for k in range(n)]
+             "running_jobs": 10, "time_limit_s": 3 * 86400, "tpc": tpc, "cpus_per_node": 32 * tpc, "gpus_per_node": gpn} for k in range(n)]
 
 
 class PredictorTests(unittest.TestCase):
@@ -285,15 +322,19 @@ class PredictorTests(unittest.TestCase):
                      "partitions": {"main": {"samples": _samples(40, idle=20, pending_nodes=5), "time_limit_s": 86400,
                                              "total_nodes": 100, "cores_per_node": 32, "typical_hours": 4.0},
                                     "short": {"samples": _samples(40, idle=50, pending_nodes=0), "time_limit_s": 3600,
-                                              "total_nodes": 60, "cores_per_node": 32, "typical_hours": 0.5}},
+                                              "total_nodes": 60, "cores_per_node": 32, "typical_hours": 0.5},
+                                    "gpu": {"samples": _samples(40, idle=3, pending_nodes=10, total=20, gpn=4), "time_limit_s": 86400,
+                                            "total_nodes": 20, "cores_per_node": 32, "gpus_per_node": 4, "gpu": True, "typical_hours": 6.0}},
                      "projects": {"p-free": {"fairshare_me": 0.9, "fairshare_account": 0.9,
-                                             "quota": {"limit_core_h": 1000, "used_core_h": 500}, "running_cores": 0, "pending_cores": 0}}},
+                                             "quota": {"limit_h": 1000, "used_h": 500}, "gpu_quota": {"limit_h": 100, "used_h": 90},
+                                             "running_cores": 0, "pending_cores": 0}}},
         }}
 
     def test_ranking(self):
         res = predict(Request(nodes=2, hours=4), self._data())
         names = [(c["cluster"], c["partition"]) for c in res["candidates"]]
         self.assertEqual(names[0], ("free", "main"))
+        self.assertNotIn(("free", "gpu"), names)  # a CPU job never lands on a GPU partition
         best = res["candidates"][0]
         self.assertEqual(best["immediate_probability"], 1.0)
         self.assertEqual(best["confidence"], "good")
@@ -317,6 +358,19 @@ class PredictorTests(unittest.TestCase):
         big = predict(Request(nodes=500, hours=1), self._data())
         self.assertEqual(big["candidates"], [])
         self.assertTrue(all("nodes in the partition" in c["excluded"] for c in big["excluded"]))
+
+    def test_gpu_jobs_use_gpu_partitions(self):
+        res = predict(Request(nodes=1, hours=2, gpus=2), self._data())
+        self.assertEqual([(c["cluster"], c["partition"]) for c in res["candidates"]], [("free", "gpu")])
+        self.assertTrue(res["candidates"][0]["factors"]["gpu"])
+        self.assertTrue(any("quota nearly used" in r and "GPU-h" in r for r in res["candidates"][0]["reasons"]))  # 10 GPU-h left, needs 4
+        too_many = predict(Request(nodes=1, hours=2, gpus=8), self._data())
+        self.assertEqual(too_many["candidates"], [])
+        self.assertIn("only 4 GPUs per node", too_many["excluded"][0]["excluded"])
+        over_quota = predict(Request(nodes=1, hours=10, gpus=2), self._data())  # 20 GPU-h > 10 left
+        self.assertIn("quota", over_quota["excluded"][0]["excluded"])
+        explicit = predict(Request(nodes=1, hours=2, gpus=0, partitions=["gpu"]), self._data())
+        self.assertEqual(len(explicit["candidates"]), 1)  # naming the partition overrides the CPU/GPU split
 
     def test_nice_and_stale(self):
         data = self._data()

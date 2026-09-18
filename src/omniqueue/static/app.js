@@ -21,7 +21,8 @@
     error: null,
     matches: new Map(), // job key -> fuzzy match info for the current search
     expanded: new Set(), // array groups opened to show their tasks
-    view: "jobs", // "jobs" | "load" | "predict"; load and predict are entered explicitly
+    view: "jobs", // "jobs" | "load" | "predict" | "project"; the others are entered explicitly
+    projectKey: null, // "cluster/project" shown in the project view
     load: null, // last /api/load answer
     loadTimer: null,
     projects: null, // last /api/projects answer (slow background poll, own card row)
@@ -265,15 +266,16 @@
   }
 
   function renderView() {
-    const load = state.view === "load", predict = state.view === "predict";
+    const load = state.view === "load", predict = state.view === "predict", project = state.view === "project";
     $("#load").hidden = !load;
     $("#predict").hidden = !predict;
-    $("#jobs-view").hidden = load || predict;
+    $("#project").hidden = !project;
+    $("#jobs-view").hidden = load || predict || project;
     $("#view-toggle").classList.toggle("active", load);
     $("#predict-toggle").classList.toggle("active", predict);
     $("#predict-toggle").hidden = !state.experimental;
-    for (const b of $$("#tabs button[data-tab]")) b.disabled = load || predict;
-    if (load) renderLoad(); else if (predict) renderPredict(); else renderTable();
+    for (const b of $$("#tabs button[data-tab]")) b.disabled = load || predict || project;
+    if (load) renderLoad(); else if (predict) renderPredict(); else if (project) renderProjectView(); else renderTable();
   }
 
   // `l`: enter the load view and fetch; `l` again (or the button): fetch again. `q`: back to the queue.
@@ -369,21 +371,28 @@
         continue;
       }
       if (c.warning) box.append(el("div", { class: "load-empty" }, `⚠ ${c.warning}`));
-      const table = el("table", { class: "parts" },
-        el("thead", {}, el("tr", {},
-          el("th", {}, "Partition"), el("th", {}, "Nodes"), el("th", { class: "num" }, "Free nodes"), el("th", { class: "num" }, "Total"),
-          el("th", { class: "num", title: "physical cores: idle / total" }, "Free cores"), el("th", { class: "num" }, "Max time"),
-          el("th", { class: "num", title: "running jobs, all users" }, "Running"),
-          el("th", { class: "num", title: "pending jobs from all users; array tasks counted individually" }, "Queued jobs"),
-          el("th", { class: "num", title: "nodes those queued jobs need in total: the larger of the requested node count and requested CPUs / CPUs per node" }, "Nodes needed"))),
-        el("tbody", {}, ...c.partitions.map((p) => partitionRow(p))));
-      box.append(el("div", { class: "parts-wrap" }, table));
+      // two groups: CPU partitions and GPU partitions (those sinfo reports GPUs for)
+      const cpuParts = c.partitions.filter((p) => !p.gpu), gpuParts = c.partitions.filter((p) => p.gpu);
+      const header = (gpu) => el("tr", {},
+        el("th", {}, "Partition"), el("th", {}, "Nodes"), el("th", { class: "num" }, "Free nodes"), el("th", { class: "num" }, "Total"),
+        gpu ? el("th", { class: "num", title: "GPUs on fully idle nodes / all GPUs in the partition" }, "Free GPUs") : null,
+        el("th", { class: "num", title: "physical cores: idle / total" }, "Free cores"), el("th", { class: "num" }, "Max time"),
+        el("th", { class: "num", title: "running jobs, all users" }, "Running"),
+        el("th", { class: "num", title: "pending jobs from all users; array tasks counted individually" }, "Queued jobs"),
+        el("th", { class: "num", title: "nodes those queued jobs need in total: the larger of the requested node count and requested CPUs / CPUs per node" }, "Nodes needed"));
+      const group = (parts, gpu) => el("table", { class: `parts ${gpu ? "gpu" : "cpu"}` },
+        el("thead", {}, gpuParts.length ? el("tr", { class: "group-row" }, el("th", { colspan: gpu ? 10 : 9 }, gpu ? `GPU partitions · ${parts.map((p) => `${p.partition}: ${p.gpus_per_node} GPUs/node`).join(", ")}` : "CPU partitions")) : null, header(gpu)),
+        el("tbody", {}, ...parts.map((p) => partitionRow(p, gpu))));
+      const wrap = el("div", { class: "parts-wrap" });
+      if (cpuParts.length) wrap.append(group(cpuParts, false));
+      if (gpuParts.length) wrap.append(group(gpuParts, true));
+      box.append(wrap);
       root.append(box);
     }
     if (!root.children.length) root.append(el("div", { class: "load-empty" }, "no clusters to show"));
   }
 
-  function partitionRow(p) {
+  function partitionRow(p, gpu = false) {
     const n = p.nodes, total = n.total || 1;
     const seg = (k) => el("i", { class: k, style: `width:${(n[k] / total * 100).toFixed(1)}%`, title: `${n[k]} ${k}` });
     const wanted = p.pending_nodes;
@@ -396,6 +405,7 @@
         seg("idle"), seg("mixed"), seg("allocated"), seg("unavailable"))),
       el("td", { class: `num free ${n.idle ? "" : "none"}` }, fmtInt(n.idle)),
       el("td", { class: "num" }, fmtInt(n.total)),
+      gpu ? el("td", { class: `num free ${p.gpus?.idle ? "" : "none"}`, title: "GPUs on fully idle nodes; GPUs free on partly used nodes are not visible to sinfo" }, `${fmtInt(p.gpus?.idle ?? 0)} / ${fmtInt(p.gpus?.total ?? 0)}`) : null,
       el("td", { class: "num", title: p.threads_per_core > 1 ? `${fmtInt(p.cpus.idle)} / ${fmtInt(p.cpus.total)} Slurm CPUs (${p.threads_per_core} threads per core)` : "" },
         `${fmtInt((p.cores || p.cpus).idle)} / ${fmtInt((p.cores || p.cpus).total)}`),
       el("td", { class: "num" }, fmtLimit(p.time_limit_s)),
@@ -674,6 +684,7 @@
       projEtag = res.headers.get("ETag");
       state.projects = await res.json();
       renderProjects();
+      if (state.view === "project") renderProjectView();
     } catch { /* the cluster cards already show that the server is unreachable */ }
     if (state.projects?.projects?.some((p) => p.fetching || p.backfill_pending)) setTimeout(fetchProjects, p_backfill_ms(state.projects));
   }
@@ -707,9 +718,16 @@
     return bar;
   }
 
+  const fmtGpuH = (x) => `${fmtCoreH(x)} GPU-h`;
+  function usageRow(label, valueText, title, parts, total, barTitle) {
+    return el("div", { class: "prow" }, el("span", { class: "plabel" }, label),
+      el("span", { class: "pval", title }, valueText), stackBar(parts, total, barTitle));
+  }
+
   function projectCard(p) {
     const color = p.color || clusterColor(p.cluster);
-    const card = el("article", { class: "card pcard", style: `--card-color:${color}` });
+    const card = el("article", { class: "card pcard", style: `--card-color:${color}`, title: "click for the project's running and waiting jobs",
+      onclick: (e) => { if (!e.target.closest("a, button")) enterProjectView(p.cluster, p.project); } });
     const updated = p.updated ? `updated ${clock(p.updated).slice(0, 5)}` : "no data yet";
     const cover = p.coverage_days == null ? "" : p.backfill_pending ? ` · loading history: ${Math.round(p.coverage_days)} d so far` : ` · ${Math.round(p.coverage_days)} d`;
     card.append(el("div", { class: "pcard-head" },
@@ -725,50 +743,65 @@
     }
     const u30 = p.usage["30"], u7 = p.usage["7"];
     const users = p.users.slice();
-    const runParts = users.map((u) => [u, p.running.users[u]?.cores || 0]).filter(([, v]) => v > 0);
-    const useParts = users.map((u) => [u, u30.users[u]?.core_h || 0]).filter(([, v]) => v > 0);
+    const rc = p.running.cpu, rg = p.running.gpu, qc = p.pending.cpu, qg = p.pending.gpu;
     const rows = el("div", { class: "prows" });
-    rows.append(
-      el("div", { class: "prow" }, el("span", { class: "plabel" }, "running now"),
-        el("span", { class: "pval", title: `${p.running.jobs} running jobs on ${p.running.nodes} nodes, ${p.pending.jobs} waiting (${Math.round(p.pending.cores)} cores asked for)` },
-          `${plural(p.running.jobs, "job")} · ${fmtInt(Math.round(p.running.cores))} cores`,
-          p.pending.jobs ? el("span", { class: "muted" }, ` · ${fmtInt(p.pending.jobs)} waiting`) : null),
-        stackBar(runParts, p.running.cores, "cores in use right now, by user")),
-      el("div", { class: "prow" }, el("span", { class: "plabel" }, "last 30 d"),
-        el("span", { class: "pval", title: `${Math.round(u30.core_h).toLocaleString("en")} core-hours in ${u30.jobs} jobs over 30 days; ${Math.round(u7.core_h).toLocaleString("en")} in the last 7 days` },
-          `${fmtCoreH(u30.core_h)} core-h · ${plural(u30.jobs, "job")}`,
-          el("span", { class: "muted" }, ` · 7 d ${fmtCoreH(u7.core_h)}`)),
-        stackBar(useParts, u30.core_h, "core-hours in the last 30 days, by user")));
-    card.append(rows);
-    // daily core-hours, stacked by user
-    const daily = p.daily || [];
-    const max = Math.max(1, ...daily.map((d) => d.core_h));
-    const chart = el("div", { class: "pdaily", title: "core-hours per day, last 30 days" });
-    for (const d of daily) {
-      const col = el("div", { class: "pday", title: `${d.date}: ${Math.round(d.core_h).toLocaleString("en").replace(/,/g, " ")} core-h` });
-      for (const u of users) {
-        const v = d.users[u] || 0;
-        if (v > 0) col.append(el("i", { style: `height:${(v / max * 100).toFixed(1)}%;background:${userColor(u)}` }));
-      }
-      chart.append(col);
+    // CPU side: cores now, core-hours over 30 days
+    rows.append(usageRow(p.has_gpu ? "cpu now" : "running now",
+      el("span", {}, `${plural(rc.jobs, "job")} · ${fmtInt(Math.round(rc.cores))} cores`, qc.jobs ? el("span", { class: "muted" }, ` · ${fmtInt(qc.jobs)} waiting`) : null),
+      `${rc.jobs} running jobs on ${rc.nodes} nodes, ${qc.jobs} waiting (${Math.round(qc.cores)} cores asked for)` + (p.has_gpu ? "; CPU jobs only, GPU jobs are counted in the GPU rows" : ""),
+      users.map((u) => [u, rc.users[u]?.cores || 0]).filter(([, v]) => v > 0), rc.cores, "cores in use right now, by user"));
+    rows.append(usageRow(p.has_gpu ? "cpu 30 d" : "last 30 d",
+      el("span", {}, `${fmtCoreH(u30.cpu.core_h)} core-h · ${plural(u30.cpu.jobs, "job")}`, el("span", { class: "muted" }, ` · 7 d ${fmtCoreH(u7.cpu.core_h)}`)),
+      `${Math.round(u30.cpu.core_h).toLocaleString("en")} core-hours in ${u30.cpu.jobs} jobs over 30 days; ${Math.round(u7.cpu.core_h).toLocaleString("en")} in the last 7 days` + (p.has_gpu ? "; CPU jobs only, GPU jobs are counted in the GPU rows" : ""),
+      users.map((u) => [u, u30.cpu.users[u]?.core_h || 0]).filter(([, v]) => v > 0), u30.cpu.core_h, "core-hours in the last 30 days, by user"));
+    if (p.has_gpu) {
+      // GPU side: GPUs now, GPU-hours over 30 days (jobs with GPUs or on a GPU partition)
+      rows.append(usageRow("gpu now",
+        el("span", {}, `${plural(rg.jobs, "job")} · ${fmtInt(Math.round(rg.gpus))} GPUs`, qg.jobs ? el("span", { class: "muted" }, ` · ${fmtInt(qg.jobs)} waiting`) : null),
+        `${rg.jobs} running GPU jobs on ${rg.nodes} nodes, ${qg.jobs} waiting (${Math.round(qg.gpus)} GPUs asked for)` + (p.gpu_partitions.length ? `; GPU partitions: ${p.gpu_partitions.join(", ")}` : ""),
+        users.map((u) => [u, rg.users[u]?.gpus || 0]).filter(([, v]) => v > 0), rg.gpus, "GPUs in use right now, by user"));
+      rows.append(usageRow("gpu 30 d",
+        el("span", {}, `${fmtGpuH(u30.gpu.gpu_h)} · ${plural(u30.gpu.jobs, "job")}`, el("span", { class: "muted" }, ` · 7 d ${fmtCoreH(u7.gpu.gpu_h)}`)),
+        `${Math.round(u30.gpu.gpu_h).toLocaleString("en")} GPU-hours in ${u30.gpu.jobs} GPU jobs over 30 days (${Math.round(u30.gpu.core_h).toLocaleString("en")} core-hours alongside); ${Math.round(u7.gpu.gpu_h).toLocaleString("en")} GPU-h in the last 7 days`,
+        users.map((u) => [u, u30.gpu.users[u]?.gpu_h || 0]).filter(([, v]) => v > 0), u30.gpu.gpu_h, "GPU-hours in the last 30 days, by user"));
     }
-    card.append(chart);
-    // user legend
+    card.append(rows);
+    // daily chart(s), stacked by user: core-hours, and GPU-hours when the project has any
+    const daily = p.daily || [];
+    const dailyChart = (key, usersKey, unit) => {
+      const max = Math.max(1, ...daily.map((d) => d[key]));
+      const chart = el("div", { class: `pdaily ${key === "gpu_h" ? "gpu" : ""}`, title: `${unit} per day, last 30 days` });
+      for (const d of daily) {
+        const col = el("div", { class: "pday", title: `${d.date}: ${Math.round(d[key]).toLocaleString("en").replace(/,/g, " ")} ${unit}` });
+        for (const u of users) {
+          const v = d[usersKey][u] || 0;
+          if (v > 0) col.append(el("i", { style: `height:${(v / max * 100).toFixed(1)}%;background:${userColor(u)}` }));
+        }
+        chart.append(col);
+      }
+      return chart;
+    };
+    card.append(dailyChart("core_h", "users", "core-h"));
+    if (p.has_gpu && daily.some((d) => d.gpu_h > 0)) card.append(el("div", { class: "pchart-label" }, "GPU-h per day"), dailyChart("gpu_h", "gpu_users", "GPU-h"));
+    // user legend: core-hours, and GPU-hours where they have any
     const legend = el("div", { class: `pusers ${users.length > 8 ? "many" : ""}` });
     for (const u of users) {
       const me = u === p.me;
       const fs = p.shares?.users?.[u]?.fairshare;
-      legend.append(el("span", { class: `puser ${me ? "me" : ""}`, title: `${u}: ${Math.round(u30.users[u]?.core_h || 0).toLocaleString("en")} core-h in 30 d` + (fs != null ? `, fairshare ${fs.toFixed(2)}` : "") },
-        el("i", { style: `background:${userColor(u)}` }), me ? `${u} (you)` : u, el("small", {}, fmtCoreH(u30.users[u]?.core_h || 0))));
+      const ch = u30.cpu.users[u]?.core_h || 0, gh = u30.gpu.users[u]?.gpu_h || 0;
+      legend.append(el("span", { class: `puser ${me ? "me" : ""}`, title: `${u}: ${Math.round(ch).toLocaleString("en")} core-h and ${Math.round(gh).toLocaleString("en")} GPU-h in 30 d` + (fs != null ? `, fairshare ${fs.toFixed(2)}` : "") },
+        el("i", { style: `background:${userColor(u)}` }), me ? `${u} (you)` : u, el("small", {}, fmtCoreH(ch)), gh > 0 ? el("small", { class: "gpu" }, `${fmtCoreH(gh)} GPU-h`) : null));
     }
     card.append(legend);
     const foot = el("div", { class: "card-foot" });
-    if (p.quota) {
-      const frac = p.quota.fraction ?? 0;
-      foot.append(el("span", { class: "pquota", title: `${p.quota.window === "30 d" ? "core-hours used in the last 30 days against the configured monthly quota" : "Slurm accounting limit from sshare (GrpTRESMins)"}` },
+    const quotaEl = (q, unit) => {
+      const frac = q.fraction ?? 0;
+      return el("span", { class: "pquota", title: q.window === "30 d" ? `${unit} used in the last 30 days against the configured monthly quota` : `Slurm accounting limit from sshare (GrpTRESMins)` },
         el("span", { class: "gauge-bar " + (frac > 0.9 ? "hot" : "") }, el("i", { style: `width:${(frac * 100).toFixed(1)}%` })),
-        `${fmtCoreH(p.quota.used_core_h)} / ${fmtCoreH(p.quota.limit_core_h)} core-h (${p.quota.window})`));
-    }
+        `${fmtCoreH(q.used_h)} / ${fmtCoreH(q.limit_h)} ${unit} (${q.window})`);
+    };
+    if (p.quota) foot.append(quotaEl(p.quota, "core-h"));
+    if (p.gpu_quota) foot.append(quotaEl(p.gpu_quota, "GPU-h"));
     if (p.shares?.fairshare != null) {
       const mine = p.shares.users?.[p.me]?.fairshare;
       foot.append(el("span", { title: "Slurm fairshare factor: 1 = front of the queue, 0 = back" },
@@ -779,6 +812,48 @@
     return card;
   }
 
+  // ---------- project view: the project's own queue ----------
+  function enterProjectView(cluster, project) {
+    state.projectKey = `${cluster}/${project}`;
+    state.view = "project";
+    closeDrawer();
+    renderView();
+  }
+  function renderProjectView() {
+    const p = state.projects?.projects.find((x) => `${x.cluster}/${x.project}` === state.projectKey);
+    const title = $("#project-title");
+    if (!p) { title.textContent = "project not found"; $("#project-jobs tbody").replaceChildren(); return; }
+    const color = p.color || clusterColor(p.cluster);
+    const rc = p.running.cpu, rg = p.running.gpu, qc = p.pending.cpu, qg = p.pending.gpu;
+    title.replaceChildren(el("span", { class: "w-cpill", style: `background:${color};color:#fff` }, p.cluster), el("b", {}, p.project),
+      el("span", { class: "muted" }, ` · ${plural(rc.jobs + rg.jobs, "job")} running, ${fmtInt(qc.jobs + qg.jobs)} waiting`
+        + (p.has_gpu ? ` · ${fmtInt(Math.round(rc.cores))} cores and ${fmtInt(Math.round(rg.gpus))} GPUs in use` : ` · ${fmtInt(Math.round(rc.cores))} cores in use`)));
+    $("#project-note").textContent = p.updated
+      ? `every user's jobs in this project as of the last project poll (${clock(p.updated).slice(0, 5)}, every ${fmtEvery(p.refresh_seconds)}); pending arrays count as one row`
+      : "no data yet";
+    const rows = (p.jobs_now || []).map((j) => {
+      const me = j.user === p.me;
+      const frac = j.category === "running" && j.time_limit_s ? Math.min(1, (j.elapsed_s || 0) / j.time_limit_s) : null;
+      return el("tr", { class: me ? "me" : "" },
+        el("td", {}, el("span", { class: "puser" }, el("i", { style: `background:${userColor(j.user)}` }), me ? `${j.user} (you)` : j.user)),
+        el("td", { class: "mono" }, j.job_id),
+        el("td", { class: "name", title: j.name }, j.name || ""),
+        el("td", {}, el("span", { class: `state ${j.category}` }, j.category === "running" ? "running" : "pending"),
+          j.tasks > 1 ? el("span", { class: "array-tag" }, `array · ${j.tasks}`) : null),
+        el("td", { class: "num mono" }, frac === null ? fmtDuration(j.elapsed_s) : el("span", { class: "bar " + (frac > 0.9 ? "hot" : ""), title: `${Math.round(frac * 100)}% of time limit used` },
+          el("i", { style: `width:${(frac * 100).toFixed(1)}%` }), el("span", {}, fmtDuration(j.elapsed_s)))),
+        el("td", { class: "num mono" }, fmtDuration(j.time_limit_s)),
+        el("td", { class: "num" }, j.nodes || "–"),
+        el("td", { class: "num" }, fmtInt(Math.round(j.cores))),
+        el("td", { class: `num ${j.kind === "gpu" ? "gpu" : "muted"}` }, j.kind === "gpu" ? fmtInt(Math.round(j.gpus)) : "–"),
+        el("td", {}, j.partition || "–"));
+    });
+    $("#project-jobs tbody").replaceChildren(...rows);
+    $("#project-jobs").hidden = !rows.length;
+    $("#project-empty").hidden = !!rows.length;
+  }
+  $("#project-back").addEventListener("click", leaveLoadView);
+
   function renderProjects() {
     const pr = state.projects;
     const sec = $("#projects");
@@ -786,7 +861,10 @@
     sec.hidden = false;
     // colour users by overall usage so the same person keeps their colour across cards
     const totals = new Map();
-    for (const p of pr.projects) for (const [u, v] of Object.entries(p.usage["30"].users)) totals.set(u, (totals.get(u) || 0) + v.core_h);
+    for (const p of pr.projects) {
+      for (const [u, v] of Object.entries(p.usage["30"].cpu.users)) totals.set(u, (totals.get(u) || 0) + v.core_h);
+      for (const [u, v] of Object.entries(p.usage["30"].gpu.users)) totals.set(u, (totals.get(u) || 0) + v.gpu_h * 30 + v.core_h);
+    }
     for (const [u] of [...totals].sort((a, b) => b[1] - a[1])) userColor(u);
     const fetching = pr.projects.some((p) => p.fetching);
     const filling = pr.projects.some((p) => p.backfill_pending && !p.error);
@@ -805,8 +883,9 @@
       $("#proj-compact").replaceChildren(...pr.projects.map((p) => {
         const color = p.color || clusterColor(p.cluster);
         const u30 = p.usage["30"];
-        const text = p.error && !p.updated ? "no data" : `${plural(p.running.jobs, "job")} running · ${fmtCoreH(u30.core_h)} core-h / 30 d`;
-        return el("span", { class: `pmini ${p.error && !p.updated ? "err" : ""}`, style: `--card-color:${color}`, title: `${p.cluster} · ${p.project}: ${p.error || text}`, onclick: toggleProjects },
+        const text = p.error && !p.updated ? "no data"
+          : `${plural(p.running.cpu.jobs + p.running.gpu.jobs, "job")} running · ${fmtCoreH(u30.cpu.core_h)} core-h` + (p.has_gpu ? ` · ${fmtCoreH(u30.gpu.gpu_h)} GPU-h` : "") + " / 30 d";
+        return el("span", { class: `pmini ${p.error && !p.updated ? "err" : ""}`, style: `--card-color:${color}`, title: `${p.cluster} · ${p.project}: ${p.error || text} (click to expand)`, onclick: toggleProjects },
           el("span", { class: "w-cpill", style: `background:${color};color:#fff` }, p.cluster), el("b", {}, p.project), el("span", { class: "muted" }, text));
       }));
     } else {
@@ -856,6 +935,7 @@
     e?.preventDefault();
     const body = { nodes: Number($("#p-nodes").value) || 1, hours: Number($("#p-hours").value) || 1 };
     if ($("#p-cores").value) body.cores = Number($("#p-cores").value);
+    if (Number($("#p-gpus").value) > 0) body.gpus = Number($("#p-gpus").value);
     if ($("#p-project").value) body.projects = [$("#p-project").value];
     $("#predict-status").textContent = "estimating…";
     try {
@@ -872,7 +952,7 @@
   function renderPredict() {
     const out = $("#predict-result");
     const r = state.prediction;
-    if (!r) { out.replaceChildren(el("p", { class: "muted" }, "Describe the job and press estimate. Candidates are every partition the project poll has load samples for.")); return; }
+    if (!r) { out.replaceChildren(el("p", { class: "muted" }, "Describe the job and press estimate. Candidates are every partition the project poll has load samples for; with GPUs per node > 0 only GPU partitions, otherwise only CPU partitions.")); return; }
     if (r.error) { out.replaceChildren(el("p", { class: "muted" }, `no estimate: ${r.error}`)); return; }
     const frag = document.createDocumentFragment();
     if (!r.candidates.length) frag.append(el("p", { class: "muted" }, "No candidates yet: the project poll has not stored load samples (configure `projects` on a cluster and let `omniqueue monitor` run while logged in)."));
@@ -884,7 +964,8 @@
       r.candidates.forEach((c, i) => {
         tb.append(el("tr", { class: i === 0 ? "best" : "" },
           el("td", { class: "num" }, i + 1),
-          el("td", {}, el("span", { class: "cl", style: `--card-color:${clusterColor(c.cluster)}` }, c.cluster), el("span", { class: "muted" }, ` / ${c.partition}`)),
+          el("td", {}, el("span", { class: "cl", style: `--card-color:${clusterColor(c.cluster)}` }, c.cluster), el("span", { class: "muted" }, ` / ${c.partition}`),
+            c.factors?.gpu ? el("span", { class: "array-tag gpu" }, `${c.factors.gpus_per_node || "?"} GPU/node`) : null),
           el("td", { class: "mono" }, c.project || "–"),
           el("td", { class: "num" }, c.estimated_wait_h < 0.05 ? "≈ 0" : c.estimated_wait_h < 1 ? `${Math.round(c.estimated_wait_h * 60)} min` : `${c.estimated_wait_h.toFixed(1)} h`),
           el("td", { class: "num" }, `${Math.round(c.immediate_probability * 100)} %`),

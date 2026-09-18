@@ -101,7 +101,7 @@ class ProjectStore:
                 if proj not in projects:
                     continue
                 rec = {k: row.get(k) for k in ("user", "partition", "state", "nodes", "cpus", "cpu_s", "submit",
-                                              "start", "end", "time_limit_s", "elapsed_s")}
+                                              "start", "end", "time_limit_s", "elapsed_s", "gpus")}
                 rec["seen"] = now
                 jobs.setdefault(proj, {}).setdefault(row["job_id"], rec)  # a fresher record wins
             oldest = self.data["meta"].setdefault("oldest", {})
@@ -117,7 +117,7 @@ class ProjectStore:
                 if proj not in projects:
                     continue
                 rec = {k: row.get(k) for k in ("user", "partition", "state", "nodes", "cpus", "cpu_s", "submit",
-                                              "start", "end", "time_limit_s", "elapsed_s")}
+                                              "start", "end", "time_limit_s", "elapsed_s", "gpus")}
                 rec["seen"] = now
                 jobs.setdefault(proj, {})[row["job_id"]] = rec
             queue = self.data["queue"].setdefault(cluster, {})
@@ -155,6 +155,7 @@ class ProjectStore:
                 "pending_jobs": p["jobs"]["pending"], "pending_nodes": p["pending_nodes"],
                 "running_jobs": p["jobs"]["running"], "time_limit_s": p.get("time_limit_s"),
                 "tpc": p.get("threads_per_core", 1), "cpus_per_node": p.get("cpus_per_node", 0),
+                "gpus_per_node": p.get("gpus_per_node", 0),
             })
 
     def add_load_samples(self, cluster: str, now: float, load_parts: list[dict]) -> None:
@@ -227,12 +228,45 @@ class ProjectStore:
         return out
 
     # -- aggregation -----------------------------------------------------------------------
+    def gpn_map(self, cluster: str) -> dict[str, int]:
+        """GPUs per node per partition, from the latest load sample (0 = CPU partition)."""
+        out: dict[str, int] = {}
+        for part, samples in self.load_samples(cluster).items():
+            if samples:
+                out[part] = int(samples[-1].get("gpus_per_node") or 0)
+        return out
+
+    def gpu_partitions(self, cluster: str, configured: list[str] | None = None) -> set[str]:
+        """Partitions whose jobs count as GPU jobs: the configured list, plus those sinfo reports GPUs for."""
+        parts = set(configured or [])
+        parts.update(p for p, n in self.gpn_map(cluster).items() if n > 0)
+        return parts
+
     def summary(self, cluster: str, project: str, now: float, me: str | None = None,
-                quota_core_h: float | None = None) -> dict[str, Any]:
-        """Everything the project card shows, computed from the store."""
+                quota_core_h: float | None = None, quota_gpu_h: float | None = None,
+                gpu_partitions: list[str] | None = None) -> dict[str, Any]:
+        """Everything the project card shows, computed from the store.
+
+        CPU jobs and GPU jobs (any allocated GPU, or a job on a GPU partition) are kept
+        strictly apart: the ``cpu`` buckets hold CPU jobs in core-hours, the ``gpu``
+        buckets hold GPU jobs in GPU-hours (``gpu.core_h`` remembers the cores those
+        jobs occupied, for reference only)."""
         jobs = self.jobs(cluster, project)
         tpc = self.tpc_map(cluster)
-        cores_of = lambda rec: (rec.get("cpus") or 0) / max(1, tpc.get(rec.get("partition") or "", 1))  # noqa: E731
+        gpn = self.gpn_map(cluster)
+        gpu_parts = self.gpu_partitions(cluster, gpu_partitions)
+
+        def cores_of(rec: dict) -> float:
+            return (rec.get("cpus") or 0) / max(1, tpc.get(rec.get("partition") or "", 1))
+
+        def gpus_of(rec: dict, count: int = 1) -> float:
+            g = rec.get("gpus") or 0
+            if not g and (rec.get("partition") or "") in gpu_parts:  # gres not readable: assume whole nodes
+                g = (rec.get("nodes") or 1) * gpn.get(rec.get("partition") or "", 0)
+            return g * count
+
+        def kind_of(rec: dict) -> str:
+            return "gpu" if (rec.get("gpus") or 0) > 0 or (rec.get("partition") or "") in gpu_parts else "cpu"
 
         def interval(rec: dict) -> tuple[float, float] | None:
             start = slurm_ts(rec.get("start"))
@@ -243,65 +277,97 @@ class ProjectStore:
                 end = now if rec.get("state") in ACTIVE_STATES else (start + (rec.get("elapsed_s") or 0))
             return start, max(start, end)
 
+        def empty_usage() -> dict:
+            return {"cpu": {"core_h": 0.0, "jobs": 0, "users": {}}, "gpu": {"gpu_h": 0.0, "core_h": 0.0, "jobs": 0, "users": {}}}
+
+        def add_cpu(bucket: dict, user: str, core_h: float) -> None:
+            b = bucket["cpu"]
+            u = b["users"].setdefault(user, {"core_h": 0.0, "jobs": 0})
+            u["core_h"] += core_h
+            u["jobs"] += 1
+            b["core_h"] += core_h
+            b["jobs"] += 1
+
+        def add_usage(bucket: dict, rec: dict, overlap: float) -> None:
+            user = rec.get("user") or "?"
+            core_h = overlap * cores_of(rec) / 3600
+            if kind_of(rec) == "gpu":
+                gpu_h = overlap * gpus_of(rec) / 3600
+                b = bucket["gpu"]
+                u = b["users"].setdefault(user, {"gpu_h": 0.0, "core_h": 0.0, "jobs": 0})
+                u["gpu_h"] += gpu_h
+                u["core_h"] += core_h
+                u["jobs"] += 1
+                b["gpu_h"] += gpu_h
+                b["core_h"] += core_h
+                b["jobs"] += 1
+            else:
+                add_cpu(bucket, user, core_h)
+
+        intervals = [(rec, iv) for rec in jobs.values() if (iv := interval(rec))]
         usage: dict[str, dict] = {}
         for days in USAGE_WINDOWS_DAYS:
             w0 = now - days * 86400
-            users: dict[str, dict] = {}
-            total = 0.0
-            njobs = 0
-            for rec in jobs.values():
-                iv = interval(rec)
-                if not iv:
-                    continue
-                s, e = iv
-                overlap = max(0.0, min(e, now) - max(s, w0))
-                if overlap <= 0:
-                    continue
-                core_h = overlap * cores_of(rec) / 3600
-                u = users.setdefault(rec.get("user") or "?", {"core_h": 0.0, "jobs": 0})
-                u["core_h"] += core_h
-                u["jobs"] += 1
-                total += core_h
-                njobs += 1
-            usage[str(days)] = {"core_h": total, "jobs": njobs, "users": users}
+            bucket = empty_usage()
+            for rec, (s0, e0) in intervals:
+                overlap = max(0.0, min(e0, now) - max(s0, w0))
+                if overlap > 0:
+                    add_usage(bucket, rec, overlap)
+            usage[str(days)] = bucket
 
-        # daily buckets for the last DAILY_DAYS days, split by user
+        # daily buckets for the last DAILY_DAYS days
         day0 = time.localtime(now)
         midnight = time.mktime((day0.tm_year, day0.tm_mon, day0.tm_mday, 0, 0, 0, 0, 0, -1))
         daily: list[dict] = []
         for i in range(DAILY_DAYS - 1, -1, -1):
             d_start = midnight - i * 86400
             d_end = min(now, d_start + 86400)
-            users_d: dict[str, float] = {}
-            total_d = 0.0
-            for rec in jobs.values():
-                iv = interval(rec)
-                if not iv:
-                    continue
-                s, e = iv
-                overlap = max(0.0, min(e, d_end) - max(s, d_start))
-                if overlap <= 0:
-                    continue
-                core_h = overlap * cores_of(rec) / 3600
-                users_d[rec.get("user") or "?"] = users_d.get(rec.get("user") or "?", 0.0) + core_h
-                total_d += core_h
-            daily.append({"date": time.strftime("%m-%d", time.localtime(d_start)), "core_h": total_d, "users": users_d})
+            bucket = empty_usage()
+            for rec, (s0, e0) in intervals:
+                overlap = max(0.0, min(e0, d_end) - max(s0, d_start))
+                if overlap > 0:
+                    add_usage(bucket, rec, overlap)
+            daily.append({
+                "date": time.strftime("%m-%d", time.localtime(d_start)),
+                "core_h": bucket["cpu"]["core_h"], "gpu_h": bucket["gpu"]["gpu_h"],
+                "users": {u: v["core_h"] for u, v in bucket["cpu"]["users"].items()},
+                "gpu_users": {u: v["gpu_h"] for u, v in bucket["gpu"]["users"].items()},
+            })
 
-        running = {"jobs": 0, "cores": 0.0, "nodes": 0, "users": {}}
-        pending = {"jobs": 0, "cores": 0.0, "nodes": 0, "users": {}}
+        def empty_now() -> dict:
+            return {"cpu": {"jobs": 0, "cores": 0.0, "nodes": 0, "users": {}},
+                    "gpu": {"jobs": 0, "gpus": 0.0, "cores": 0.0, "nodes": 0, "users": {}}}
+
+        running, pending = empty_now(), empty_now()
         q = self.queue(cluster, project)
+        jobs_now: list[dict] = []
         for row in (q or {}).get("rows", []):
             bucket = running if row.get("state") == "RUNNING" else pending if row.get("state") == "PENDING" else None
             if bucket is None:
                 continue
             count = row.get("tasks") or 1
-            cores = (row.get("cpus") or 0) / max(1, tpc.get(row.get("partition") or "", 1)) * count
-            bucket["jobs"] += count
-            bucket["cores"] += cores
-            bucket["nodes"] += (row.get("nodes") or 0) * count
-            u = bucket["users"].setdefault(row.get("user") or "?", {"jobs": 0, "cores": 0.0})
-            u["jobs"] += count
-            u["cores"] += cores
+            jobs_now.append({**row, "kind": kind_of(row), "cores": cores_of(row), "gpus": gpus_of(row),
+                             "category": "running" if row.get("state") == "RUNNING" else "pending"})
+            cores = cores_of(row) * count
+            user = row.get("user") or "?"
+            targets = []
+            if kind_of(row) == "gpu":
+                b = bucket["gpu"]
+                gpus = gpus_of(row, count)
+                b["gpus"] += gpus
+                u = b["users"].setdefault(user, {"jobs": 0, "gpus": 0.0})
+                u["gpus"] += gpus
+                targets.append((b, u))
+            else:
+                b = bucket["cpu"]
+                targets.append((b, b["users"].setdefault(user, {"jobs": 0, "cores": 0.0})))
+            for b, u in targets:
+                b["jobs"] += count
+                b["cores"] += cores
+                b["nodes"] += (row.get("nodes") or 0) * count
+                u["jobs"] += count
+                if "cores" in u:
+                    u["cores"] += cores
 
         shares_hist = self.shares(cluster, project)
         latest = shares_hist[-1] if shares_hist else None
@@ -315,24 +381,38 @@ class ProjectStore:
                 "trend": [{"ts": s["ts"], "fairshare": (s.get("account") or {}).get("fairshare")} for s in shares_hist[-30:]],
             }
 
-        quota = None
-        if quota_core_h:
-            quota = {"limit_core_h": float(quota_core_h), "used_core_h": usage["30"]["core_h"], "source": "config", "window": "30 d"}
-        elif latest and (latest.get("account") or {}).get("grp_tres_mins", {}).get("cpu"):
-            acc = latest["account"]
-            quota = {"limit_core_h": acc["grp_tres_mins"]["cpu"] / 60, "used_core_h": (acc.get("grp_tres_raw") or {}).get("cpu", 0) / 60,
-                     "source": "sshare", "window": "allocation"}
-        if quota:
-            quota["fraction"] = min(1.0, quota["used_core_h"] / quota["limit_core_h"]) if quota["limit_core_h"] else None
+        def make_quota(limit: float | None, used: float, source: str, window: str) -> dict | None:
+            if not limit:
+                return None
+            return {"limit_h": float(limit), "used_h": used, "source": source, "window": window,
+                    "fraction": min(1.0, used / limit)}
 
-        users = sorted({*usage["30"]["users"], *running["users"], *pending["users"]},
-                       key=lambda u: -(usage["30"]["users"].get(u, {}).get("core_h", 0) + running["users"].get(u, {}).get("cores", 0)))
+        acc = (latest or {}).get("account") or {}
+        grp_mins, grp_raw = acc.get("grp_tres_mins") or {}, acc.get("grp_tres_raw") or {}
+        quota = make_quota(quota_core_h, usage["30"]["cpu"]["core_h"], "config", "30 d") if quota_core_h else \
+            make_quota((grp_mins.get("cpu") or 0) / 60, (grp_raw.get("cpu") or 0) / 60, "sshare", "allocation")
+        gpu_quota = make_quota(quota_gpu_h, usage["30"]["gpu"]["gpu_h"], "config", "30 d") if quota_gpu_h else \
+            make_quota((grp_mins.get("gres/gpu") or 0) / 60, (grp_raw.get("gres/gpu") or 0) / 60, "sshare", "allocation")
+
+        u30 = usage["30"]
+        weight = {}
+        for u, v in u30["cpu"]["users"].items():
+            weight[u] = weight.get(u, 0) + v["core_h"]
+        for u, v in u30["gpu"]["users"].items():
+            weight[u] = weight.get(u, 0) + v["gpu_h"] * 30 + v["core_h"]  # a GPU-hour weighs like ~30 core-hours here
+        for bucket in (running["cpu"], running["gpu"], pending["cpu"], pending["gpu"]):
+            for u in bucket["users"]:
+                weight.setdefault(u, 0)
+        users = sorted(weight, key=lambda u: -weight[u])
+        has_gpu = bool(gpu_parts) or u30["gpu"]["jobs"] > 0 or running["gpu"]["jobs"] > 0 or pending["gpu"]["jobs"] > 0
         starts = [slurm_ts(r.get("start")) for r in jobs.values()]
-        oldest = min([s for s in starts if s], default=None)
+        oldest = min([s0 for s0 in starts if s0], default=None)
         return {
             "cluster": cluster, "project": project, "updated": (q or {}).get("ts") or self.last_poll(cluster),
-            "running": running, "pending": pending, "usage": usage, "daily": daily, "shares": shares, "quota": quota,
+            "running": running, "pending": pending, "usage": usage, "daily": daily, "shares": shares,
+            "quota": quota, "gpu_quota": gpu_quota, "has_gpu": has_gpu, "gpu_partitions": sorted(gpu_parts),
             "users": users, "me": me, "jobs_known": len(jobs), "oldest": oldest,
+            "jobs_now": sorted(jobs_now, key=lambda r: (r["category"] != "running", -(r.get("elapsed_s") or 0), r["job_id"])),
         }
 
     def typical_hours(self, cluster: str, partition: str) -> float | None:
@@ -590,7 +670,8 @@ class ProjectPoller:
             st["color"] = cs.color if cs else c.color
             clusters.append(st)
             for proj in c.projects:
-                s = self.store.summary(c.name, proj, now, me=self.me(c), quota_core_h=c.project_quotas.get(proj))
+                s = self.store.summary(c.name, proj, now, me=self.me(c), quota_core_h=c.project_quotas.get(proj),
+                                       quota_gpu_h=c.project_gpu_quotas.get(proj), gpu_partitions=c.gpu_partitions)
                 s["color"] = st["color"]
                 s["error"] = st["error"]
                 s["error_kind"] = st["error_kind"]
@@ -623,18 +704,22 @@ class ProjectPoller:
                 partitions[part] = {
                     "samples": ss, "time_limit_s": last.get("time_limit_s"), "total_nodes": last.get("total"),
                     "cores_per_node": (last.get("cpus_per_node") or 0) // max(1, last.get("tpc") or 1),
+                    "gpus_per_node": last.get("gpus_per_node") or 0,
+                    "gpu": part in c.gpu_partitions or (last.get("gpus_per_node") or 0) > 0,
                     "typical_hours": self.store.typical_hours(c.name, part),
                 }
             me = self.me(c)
             projs = {}
             for proj in c.projects:
-                summ = self.store.summary(c.name, proj, now, me=me, quota_core_h=c.project_quotas.get(proj))
+                summ = self.store.summary(c.name, proj, now, me=me, quota_core_h=c.project_quotas.get(proj),
+                                          quota_gpu_h=c.project_gpu_quotas.get(proj), gpu_partitions=c.gpu_partitions)
                 sh = summ.get("shares") or {}
                 projs[proj] = {
                     "fairshare_me": (sh.get("users", {}).get(me) or {}).get("fairshare"),
                     "fairshare_account": sh.get("fairshare"),
-                    "quota": summ.get("quota"),
-                    "running_cores": summ["running"]["cores"], "pending_cores": summ["pending"]["cores"],
+                    "quota": summ.get("quota"), "gpu_quota": summ.get("gpu_quota"),
+                    "running_cores": summ["running"]["cpu"]["cores"], "pending_cores": summ["pending"]["cpu"]["cores"],
+                    "running_gpus": summ["running"]["gpu"]["gpus"], "pending_gpus": summ["pending"]["gpu"]["gpus"],
                 }
             own_waits = []
             for j in self.collector.history.jobs_for(c.name):

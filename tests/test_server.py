@@ -157,7 +157,10 @@ class ServerTests(unittest.TestCase):
         self.assertTrue(pr["enabled"])
         by = {p["project"]: p for p in pr["projects"]}
         self.assertIn("naiss2025-1-42", by)
-        self.assertGreater(by["naiss2025-1-42"]["usage"]["30"]["core_h"], 0)
+        self.assertGreater(by["naiss2025-1-42"]["usage"]["30"]["cpu"]["core_h"], 0)
+        self.assertGreater(by["project_465000123"]["usage"]["30"]["gpu"]["gpu_h"], 0)
+        self.assertEqual(by["project_465000123"]["gpu_quota"]["source"], "config")
+        self.assertTrue(by["project_465000123"]["jobs_now"])
         self.assertEqual(by["naiss2025-1-42"]["quota"]["source"], "config")
         self.assertEqual(by["naiss2025-9-9"]["error_kind"], "network")
         req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/projects/refresh", method="POST",
