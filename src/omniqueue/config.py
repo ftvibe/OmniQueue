@@ -65,6 +65,8 @@ class Config:
     retry_seconds: int = 15  # first retry delay after a failed poll (doubles up to refresh_seconds)
     project_refresh_seconds: int = 2 * 3600  # slow background poll of project usage, fairshare and load samples
     project_history_days: int = 90  # how long project jobs and load samples are kept for the rolling overview
+    project_timeout: int = 300  # seconds allowed for one project poll (sacct over many users is slow)
+    project_backfill_days: int = 7  # older history is fetched in chunks of this many days, one chunk a minute
     listen_host: str = "127.0.0.1"
     listen_port: int = 8765
     data_dir: Path = field(default_factory=default_data_dir)
@@ -123,6 +125,8 @@ keepalive_seconds = 15       # notice a dead connection (new wifi, sleep) within
 retry_seconds   = 15         # retry a failed cluster after 15 s, 30 s, 60 s ... up to refresh_seconds
 project_refresh_seconds = 7200  # project usage / fairshare / load samples: slow background poll (2 h)
 project_history_days = 90       # project jobs and load samples kept this long for the rolling overview
+project_timeout = 300           # seconds one project poll may take (sacct over all users is slow)
+project_backfill_days = 7       # after the first poll, older history arrives in chunks of this many days
 listen_host     = "127.0.0.1"   # keep it local; put Tailscale/ssh -L in front for remote viewing
 listen_port     = 8765
 # allow_remote  = true          # only with an access_token; every request must carry it
@@ -271,7 +275,8 @@ def config_from_dict(raw: dict) -> Config:
 
     cfg = Config(clusters=clusters)
     for key in ("refresh_seconds", "lookback_hours", "history_days", "ssh_timeout", "listen_port",
-                "persist_seconds", "keepalive_seconds", "retry_seconds", "project_refresh_seconds", "project_history_days"):
+                "persist_seconds", "keepalive_seconds", "retry_seconds", "project_refresh_seconds", "project_history_days",
+                "project_timeout", "project_backfill_days"):
         if key in raw:
             try:
                 setattr(cfg, key, int(raw[key]))
@@ -294,6 +299,8 @@ def config_from_dict(raw: dict) -> Config:
         raise ConfigError("`refresh_seconds` must be at least 5.")
     if cfg.project_refresh_seconds < 300:
         raise ConfigError("`project_refresh_seconds` must be at least 300 (this is a slow, all-users query).")
+    if cfg.project_backfill_days < 1:
+        raise ConfigError("`project_backfill_days` must be at least 1.")
     if not cfg.listens_locally:
         if not cfg.allow_remote:
             raise ConfigError(

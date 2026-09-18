@@ -39,10 +39,12 @@
 
 <section id="projects" class="projects" hidden aria-label="Projects">
   <div class="proj-bar">
-    <span class="proj-title">Projects <span id="proj-status" class="muted"></span></span>
+    <span class="proj-head"><button id="proj-toggle" class="proj-toggle" title="collapse the project cards (p)">▾</button>
+      <span class="proj-title">Projects <span id="proj-status" class="muted"></span></span></span>
     <button id="proj-refresh" title="poll the projects now (otherwise every few hours in the background)">↻ refresh projects</button>
   </div>
   <div id="proj-cards" class="proj-cards"></div>
+  <div id="proj-compact" class="proj-compact" hidden></div>
 </section>
 
 <nav class="tabs" id="tabs" role="tablist">
@@ -120,7 +122,7 @@
 
 <footer class="foot">
   <span id="footer-note"></span>
-  <span class="muted">keys: <kbd>/</kbd> search · <kbd>r</kbd> refresh · <kbd>1</kbd>–<kbd>5</kbd> tabs · <kbd>e</kbd> expand arrays · <kbd>t</kbd> theme · <kbd>w</kbd> widget · <kbd>l</kbd> cluster load · <kbd>q</kbd> back to jobs · <kbd>Esc</kbd> close</span>
+  <span class="muted">keys: <kbd>/</kbd> search · <kbd>r</kbd> refresh · <kbd>1</kbd>–<kbd>5</kbd> tabs · <kbd>e</kbd> expand arrays · <kbd>p</kbd> projects · <kbd>t</kbd> theme · <kbd>w</kbd> widget · <kbd>l</kbd> cluster load · <kbd>q</kbd> back to jobs · <kbd>Esc</kbd> close</span>
 </footer>
 <script src="/app.js"></script>
 </body>

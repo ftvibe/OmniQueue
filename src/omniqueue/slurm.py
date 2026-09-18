@@ -471,17 +471,28 @@ SSHARE_FIELDS = ["Account", "User", "RawShares", "NormShares", "RawUsage", "Effe
                  "GrpTRESMins", "GrpTRESRaw", "TRESRunMins"]
 
 
-def project_command(projects: list[str], lookback_hours: int, partitions: list[str] | None = None) -> str:
-    """Everything one project poll needs, in one ssh round trip: the projects' queue,
-    their accounting since `lookback_hours`, fairshare/usage from sshare, and a load
-    sample (sinfo + all-users squeue) for the predictor."""
+def _slurm_time(ts: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(ts))
+
+
+def project_sacct_command(projects: list[str], start_ts: float, end_ts: float | None = None) -> str:
+    """The projects' accounting (all users) between two unix times; the heavy part of a poll."""
     accounts = shlex.quote(",".join(projects))
-    start = (datetime.now() - timedelta(hours=lookback_hours)).strftime("%Y-%m-%dT%H:%M:%S")
+    end = _slurm_time(end_ts) if end_ts else "now"
+    return (f"sacct --noheader --parsable2 --allocations --allusers --accounts={accounts} "
+            f"--starttime={_slurm_time(start_ts)} --endtime={end} --format={','.join(PROJECT_SACCT_FIELDS)}")
+
+
+def project_command(projects: list[str], start_ts: float, partitions: list[str] | None = None) -> str:
+    """Everything one project poll needs, in one ssh round trip: the projects' queue,
+    their accounting since `start_ts`, fairshare/usage from sshare, and a load sample
+    (sinfo + all-users squeue) for the predictor.  Keep the sacct window short: that
+    query is the slow one on a busy accounting database."""
+    accounts = shlex.quote(",".join(projects))
     parts = [
         f"squeue --noheader --states=RUNNING,PENDING --account={accounts} --format={shlex.quote(PROJECT_SQUEUE_FIELDS)}",
         f'echo "{MARK} squeue_proj rc=$?"',
-        f"sacct --noheader --parsable2 --allocations --allusers --accounts={accounts} --starttime={start} "
-        f"--endtime=now --format={','.join(PROJECT_SACCT_FIELDS)}",
+        project_sacct_command(projects, start_ts),
         f'echo "{MARK} sacct_proj rc=$?"',
         f"sshare --noheader --parsable2 --all --accounts={accounts} --format={','.join(SSHARE_FIELDS)}",
         f'echo "{MARK} sshare rc=$?"',
@@ -489,6 +500,11 @@ def project_command(projects: list[str], lookback_hours: int, partitions: list[s
         squeue_all_command(partitions), f'echo "{MARK} squeue_all rc=$?"',
     ]
     return "; ".join(parts)
+
+
+def project_backfill_command(projects: list[str], start_ts: float, end_ts: float) -> str:
+    """Only sacct, for one older chunk of history (the back-fill after the first poll)."""
+    return f"{project_sacct_command(projects, start_ts, end_ts)}; echo \"{MARK} sacct_proj rc=$?\""
 
 
 def parse_project_queue(output: str) -> list[dict]:

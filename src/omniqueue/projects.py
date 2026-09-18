@@ -22,8 +22,8 @@ from pathlib import Path
 from typing import Any
 
 from .config import ClusterConfig, Config, secure_dir
-from .slurm import (parse_load, parse_project_queue, parse_project_sacct, parse_sshare, project_command,
-                    split_combined_output)
+from .slurm import (parse_load, parse_project_queue, parse_project_sacct, parse_sshare, project_backfill_command,
+                    project_command, split_combined_output)
 from .ssh import RemoteError, close_connection, run_on_cluster, touch_last_use
 
 log = logging.getLogger("omniqueue.projects")
@@ -88,8 +88,28 @@ class ProjectStore:
     def last_poll(self, cluster: str) -> float | None:
         return self.data["meta"]["last_poll"].get(cluster)
 
+    def oldest(self, cluster: str) -> float | None:
+        """Earliest time the accounting has been fetched back to (None before the first poll)."""
+        return self.data["meta"].setdefault("oldest", {}).get(cluster)
+
+    def record_backfill(self, cluster: str, projects: list[str], start_ts: float, sacct_rows: list[dict], now: float) -> None:
+        """Merge an older chunk of accounting and move the coverage marker back to `start_ts`."""
+        with self._lock:
+            jobs = self.data["jobs"].setdefault(cluster, {})
+            for row in sacct_rows:
+                proj = row.get("account") or ""
+                if proj not in projects:
+                    continue
+                rec = {k: row.get(k) for k in ("user", "partition", "state", "nodes", "cpus", "cpu_s", "submit",
+                                              "start", "end", "time_limit_s", "elapsed_s")}
+                rec["seen"] = now
+                jobs.setdefault(proj, {}).setdefault(row["job_id"], rec)  # a fresher record wins
+            oldest = self.data["meta"].setdefault("oldest", {})
+            oldest[cluster] = min(oldest.get(cluster, start_ts), start_ts)
+
     def record_poll(self, cluster: str, projects: list[str], now: float, sacct_rows: list[dict],
-                    queue_rows: list[dict], sshare_rows: list[dict], load_parts: list[dict]) -> None:
+                    queue_rows: list[dict], sshare_rows: list[dict], load_parts: list[dict],
+                    window_start: float | None = None) -> None:
         with self._lock:
             jobs = self.data["jobs"].setdefault(cluster, {})
             for row in sacct_rows:
@@ -119,6 +139,9 @@ class ProjectStore:
                 shares.setdefault(proj, []).append(sample)
             self._add_load_samples(cluster, now, load_parts)
             self.data["meta"]["last_poll"][cluster] = now
+            if window_start is not None:
+                oldest = self.data["meta"].setdefault("oldest", {})
+                oldest[cluster] = min(oldest.get(cluster, window_start), window_start)
             self._prune(now)
 
     def _add_load_samples(self, cluster: str, now: float, load_parts: list[dict]) -> None:
@@ -173,6 +196,7 @@ class ProjectStore:
             for key in ("jobs", "shares", "load", "queue"):
                 self.data[key].pop(cluster, None)
             self.data["meta"]["last_poll"].pop(cluster, None)
+            self.data["meta"].setdefault("oldest", {}).pop(cluster, None)
 
     # -- reading -------------------------------------------------------------------------
     def jobs(self, cluster: str, project: str) -> dict[str, dict]:
@@ -339,23 +363,28 @@ class ProjectPoller:
             self.status[c.name] = {
                 "name": c.name, "projects": list(c.projects), "refresh_seconds": config.project_interval(c),
                 "last_poll": last, "next_poll": (last + config.project_interval(c)) if last else now + 5,
-                "error": None, "error_kind": None, "warning": None, "fetching": False, "poll_seconds": None,
+                "error": None, "error_kind": None, "warning": None, "fetching": False, "backfilling": False,
+                "poll_seconds": None, "coverage_days": None,
             }
+            if last is not None:
+                self.status[c.name]["coverage_days"] = self.coverage_days(c, now)
+                if self.backfill_pending(c, now):  # resume an interrupted back-fill soon after start
+                    self.status[c.name]["next_poll"] = min(self.status[c.name]["next_poll"], now + 30)
         self.version = 0  # bumps on every change so the API can answer 304
+        self._force_regular = False  # a manual refresh runs a regular poll even mid back-fill
 
     @property
     def enabled(self) -> bool:
         return bool(self.status)
 
     # -- one cluster ------------------------------------------------------------------
-    def fetch(self, cluster: ClusterConfig) -> tuple[list[dict], list[dict], list[dict], list[dict], list[str]]:
-        """Run the combined command; returns (queue rows, sacct rows, sshare rows, load partitions, warnings)."""
-        lookback_h = self.config.project_history_days * 24
-        last = self.store.last_poll(cluster.name)
-        if last:  # only ask for what changed since the previous poll (plus a day of slack for late accounting)
-            lookback_h = min(lookback_h, int((time.time() - last) / 3600) + 24)
-        cmd = project_command(list(cluster.projects), lookback_h, cluster.load_partitions or None)
-        res = run_on_cluster(cluster, cmd, max(self.config.ssh_timeout, 60), self.config)
+    FIRST_DAYS = 3  # the first poll asks sacct for this much; older history is back-filled in chunks
+    BACKFILL_GAP = 60.0  # seconds between two back-fill chunks
+
+    def _run(self, cluster: ClusterConfig, cmd: str):
+        return run_on_cluster(cluster, cmd, max(self.config.ssh_timeout, self.config.project_timeout), self.config)
+
+    def _sections(self, res):
         sections = split_combined_output(res.stdout)
         stderr = res.stderr.strip()
         warnings: list[str] = []
@@ -369,7 +398,21 @@ class ProjectPoller:
                 warnings.append(msg)
                 return ""
             return out
+        return section, warnings
 
+    def window_start(self, cluster: ClusterConfig, now: float) -> float:
+        """Where this poll's sacct window begins: the first poll takes FIRST_DAYS, later
+        ones the time since the previous poll plus a day of slack for late accounting."""
+        last = self.store.last_poll(cluster.name)
+        if last is None:
+            return now - self.FIRST_DAYS * 86400
+        return max(now - self.config.project_history_days * 86400, last - 86400)
+
+    def fetch(self, cluster: ClusterConfig, start_ts: float) -> tuple[list[dict], list[dict], list[dict], list[dict], list[str]]:
+        """Run the combined command with an sacct window from `start_ts` to now.
+        Returns (queue rows, sacct rows, sshare rows, load partitions, warnings)."""
+        res = self._run(cluster, project_command(list(cluster.projects), start_ts, cluster.load_partitions or None))
+        section, warnings = self._sections(res)
         queue_rows = parse_project_queue(section("squeue_proj", required=True))
         sacct_rows = parse_project_sacct(section("sacct_proj"))
         sshare_rows = parse_sshare(section("sshare"))
@@ -383,7 +426,35 @@ class ProjectPoller:
                             "usage by user comes from sshare and the queue only")
         return queue_rows, sacct_rows, sshare_rows, load_parts, warnings
 
+    def fetch_backfill(self, cluster: ClusterConfig, start_ts: float, end_ts: float) -> list[dict]:
+        """One older chunk of accounting only (no queue, sshare or load)."""
+        res = self._run(cluster, project_backfill_command(list(cluster.projects), start_ts, end_ts))
+        section, _ = self._sections(res)
+        return parse_project_sacct(section("sacct_proj", required=True))
+
+    def backfill_pending(self, cluster: ClusterConfig, now: float | None = None) -> bool:
+        """True while older history is still missing from the store."""
+        now = now or time.time()
+        oldest = self.store.oldest(cluster.name)
+        return oldest is not None and oldest > now - self.config.project_history_days * 86400 + 3600
+
+    def coverage_days(self, cluster: ClusterConfig, now: float | None = None) -> float | None:
+        now = now or time.time()
+        oldest = self.store.oldest(cluster.name)
+        return None if oldest is None else min(self.config.project_history_days, (now - oldest) / 86400)
+
+    def _fail(self, cluster: ClusterConfig, exc: RemoteError, t0: float, retry_in: float) -> None:
+        log.warning("%s projects: %s (%s)", cluster.name, exc, exc.kind)
+        if exc.kind in ("timeout", "network"):
+            close_connection(cluster, self.config)
+        with self._lock:
+            self.status[cluster.name].update(error=str(exc), error_kind=exc.kind, fetching=False, backfilling=False,
+                                             poll_seconds=time.monotonic() - t0, next_poll=time.time() + retry_in)
+            self.version += 1
+
     def poll_cluster(self, cluster: ClusterConfig) -> None:
+        """A regular poll, or, when the store is up to date but history is missing, one
+        back-fill chunk.  Either way one ssh round trip."""
         st = self.status[cluster.name]
         now = time.time()
         interval = self.config.project_interval(cluster)
@@ -392,28 +463,47 @@ class ProjectPoller:
                 st.update(error="not logged in", error_kind="login", fetching=False, next_poll=now + 120)
                 self.version += 1
             return
+        last = self.store.last_poll(cluster.name)
+        backfill = (last is not None and now - last < interval and self.backfill_pending(cluster, now)
+                    and not getattr(self, "_force_regular", False))
         with self._lock:
             st["fetching"] = True
+            st["backfilling"] = backfill
             self.version += 1
         t0 = time.monotonic()
-        try:
-            queue_rows, sacct_rows, sshare_rows, load_parts, warnings = self.fetch(cluster)
-        except RemoteError as exc:
-            log.warning("%s projects: %s (%s)", cluster.name, exc, exc.kind)
-            if exc.kind in ("timeout", "network"):
-                close_connection(cluster, self.config)
-            with self._lock:
-                st.update(error=str(exc), error_kind=exc.kind, fetching=False, poll_seconds=time.monotonic() - t0,
-                          next_poll=now + min(interval, 900))
-                self.version += 1
-            return
-        self.store.record_poll(cluster.name, list(cluster.projects), now, sacct_rows, queue_rows, sshare_rows, load_parts)
+        if backfill:
+            end_ts = self.store.oldest(cluster.name)
+            start_ts = max(end_ts - self.config.project_backfill_days * 86400, now - self.config.project_history_days * 86400)
+            try:
+                rows = self.fetch_backfill(cluster, start_ts, end_ts)
+            except RemoteError as exc:
+                self._fail(cluster, exc, t0, retry_in=min(interval, 900))
+                return
+            self.store.record_backfill(cluster.name, list(cluster.projects), start_ts, rows, now)
+        else:
+            start_ts = self.window_start(cluster, now)
+            try:
+                queue_rows, sacct_rows, sshare_rows, load_parts, warnings = self.fetch(cluster, start_ts)
+            except RemoteError as exc:
+                self._fail(cluster, exc, t0, retry_in=min(interval, 900))
+                return
+            self.store.record_poll(cluster.name, list(cluster.projects), now, sacct_rows, queue_rows, sshare_rows,
+                                   load_parts, window_start=start_ts)
         if not cluster.is_local and self.config.persist_connections:
             touch_last_use(cluster, self.config)
+        more = self.backfill_pending(cluster, now)
         with self._lock:
-            st.update(error=None, error_kind=None, warning="; ".join(warnings) or None, fetching=False,
-                      last_poll=now, next_poll=now + interval, poll_seconds=time.monotonic() - t0)
+            st.update(error=None, error_kind=None, fetching=False, backfilling=False, poll_seconds=time.monotonic() - t0,
+                      coverage_days=self.coverage_days(cluster, now),
+                      # the next regular poll keeps its schedule; back-fill chunks come a minute apart in between
+                      next_poll=min(now + self.BACKFILL_GAP, self._next_regular(cluster, now)) if more else self._next_regular(cluster, now))
+            if not backfill:
+                st.update(last_poll=now, warning="; ".join(warnings) or None)
             self.version += 1
+
+    def _next_regular(self, cluster: ClusterConfig, now: float) -> float:
+        last = self.store.last_poll(cluster.name) or now
+        return last + self.config.project_interval(cluster)
 
     # -- scheduling ----------------------------------------------------------------------
     def due(self, now: float | None = None) -> list[ClusterConfig]:
@@ -426,10 +516,21 @@ class ProjectPoller:
             return
         with ThreadPoolExecutor(max_workers=min(8, len(clusters))) as pool:
             list(pool.map(self.poll_cluster, clusters))
+        self._force_regular = False
         try:
             self.store.save()
         except OSError as exc:
             log.error("could not save project store: %s", exc)
+
+    def backfill_all(self, progress=None, max_chunks: int = 200) -> None:
+        """Blocking: keep polling until every cluster's history is complete (CLI --poll)."""
+        for _ in range(max_chunks):
+            todo = [c for c in self.config.project_clusters if self.backfill_pending(c) and not self.status[c.name]["error"]]
+            if not todo:
+                return
+            if progress:
+                progress(todo)
+            self.refresh(todo)
 
     def request_refresh(self) -> bool:
         """Poll every project cluster now (the card's refresh button)."""
@@ -439,6 +540,7 @@ class ProjectPoller:
         with self._lock:
             for st in self.status.values():
                 st["next_poll"] = now
+            self._force_regular = True
         self._wake.set()
         return True
 
@@ -471,6 +573,14 @@ class ProjectPoller:
         return f'"p{self.version}"'
 
     def snapshot(self) -> dict[str, Any]:
+        cached = getattr(self, "_snap_cache", None)
+        if cached and cached[0] == self.version and time.time() - cached[1] < 300:
+            return cached[2]
+        snap = self._snapshot()
+        self._snap_cache = (self.version, time.time(), snap)
+        return snap
+
+    def _snapshot(self) -> dict[str, Any]:
         now = time.time()
         clusters = []
         projects = []
@@ -486,11 +596,15 @@ class ProjectPoller:
                 s["error_kind"] = st["error_kind"]
                 s["warning"] = st["warning"]
                 s["fetching"] = st["fetching"]
+                s["backfilling"] = st["backfilling"]
+                s["coverage_days"] = st["coverage_days"]
+                s["backfill_pending"] = self.backfill_pending(c, now)
                 s["refresh_seconds"] = st["refresh_seconds"]
                 s["next_poll"] = st["next_poll"]
                 projects.append(s)
         return {"now": now, "enabled": self.enabled, "refresh_seconds": self.config.project_refresh_seconds,
-                "history_days": self.config.project_history_days, "clusters": clusters, "projects": projects}
+                "history_days": self.config.project_history_days, "backfill_days": self.config.project_backfill_days,
+                "clusters": clusters, "projects": projects}
 
     def prediction_data(self, now: float | None = None) -> dict[str, Any]:
         """Everything the (experimental) predictor needs, as plain data: load samples per

@@ -55,6 +55,8 @@ keepalive_seconds = 15       # notice a dead connection within ~45 s
 retry_seconds   = 15         # retry failed clusters after 15 s, 30 s, 60 s ... up to refresh_seconds
 project_refresh_seconds = 7200  # slow background poll of project usage / fairshare / load samples (2 h)
 project_history_days = 90       # how long project jobs and load samples are kept
+project_timeout = 300           # one project poll may take this long (sacct over all users is slow)
+project_backfill_days = 7       # older history arrives in chunks of this many days after the first poll
 listen_host     = "127.0.0.1"
 listen_port     = 8765
 
@@ -160,7 +162,7 @@ network change that dropped the connection.
 | `omniqueue --demo ...` | run any command against fabricated clusters |
 | `omniqueue --config PATH ...` | use another config file |
 
-Dashboard keys: `/` search, `r` refresh now, `l` cluster load, `q` back to jobs, `e` expand/collapse arrays, `w` side widget, `t` theme, `1`-`5` tabs, `x` where to submit (after unlocking, see below), `Esc` close.
+Dashboard keys: `/` search, `r` refresh now, `l` cluster load, `q` back to jobs, `e` expand/collapse arrays, `w` side widget, `t` theme, `1`-`5` tabs, `p` collapse/expand the project cards, `x` where to submit (after unlocking, see below), `Esc` close.
 
 ## Tab completion
 
@@ -234,7 +236,9 @@ cluster names from your config, `list --state` the job states.
 * Click a row for all details (queue wait, node list, work dir, exit code, ...).
   Finished jobs can be removed from the local history from there.
 * **Project cards** appear below the cluster cards for every project listed in
-  the config: see [Projects](#projects-who-runs-how-much) below.
+  the config: see [Projects](#projects-who-runs-how-much) below. The ▾ at the
+  left of the row (or `p`) collapses them to one pill per project with the
+  running jobs and the 30-day usage; the choice is remembered.
 * Muted teal / coral / mustard palette, dark and light; failed and done never
   rely on a red-green pair. The ◐ button (or `t`) cycles auto / dark / light.
 * Keys: `/` search, `r` refresh now, `l` cluster load (again: refetch), `q` back to jobs, `t` theme, `1`-`5` tabs, `Esc` close.
@@ -297,7 +301,12 @@ same `sinfo` + all-users `squeue` the load view uses. Everything lands in
 `~/.local/share/omniqueue/projects.json`: project jobs are stored individually
 and kept for `project_history_days` (90 by default), so the rolling overview
 outlives Slurm's own accounting window and a restart never re-fetches history.
-Only the slice since the last poll is requested each time. Some sites hide
+Only the slice since the last poll is requested each time. `sacct` over every
+user of a project is slow on a busy accounting database, so the first poll asks
+for three days only and the rest of `project_history_days` is back-filled in
+`project_backfill_days` chunks one minute apart (the card says "loading history:
+24 d so far" meanwhile, and `omniqueue projects --poll` runs the chunks to
+completion). One poll may take `project_timeout` seconds (300). Some sites hide
 other users' jobs in `sacct`; the card then says so and the per-user split
 comes from the queue and from `sshare` only. `omniqueue projects` prints the
 same overview in the terminal.

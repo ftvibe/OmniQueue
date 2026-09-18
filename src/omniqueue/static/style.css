@@ -111,7 +111,16 @@ kbd { font: 11px var(--mono); background: var(--surface-2); border: 1px solid va
 /* ---- projects (slow background poll) ---- */
 .projects { padding: 10px 20px 4px; }
 .proj-bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; font-size: 13px; }
-.proj-title { font-weight: 600; color: var(--ink-2); }
+.proj-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.proj-toggle { background: none; border: none; padding: 0 4px; color: var(--muted); font-size: 14px; line-height: 1; }
+.proj-toggle:hover { color: var(--ink); }
+.proj-title { font-weight: 600; color: var(--ink-2); cursor: pointer; }
+.proj-compact { display: flex; flex-wrap: wrap; gap: 6px 8px; }
+.proj-cards[hidden], .proj-compact[hidden] { display: none; }
+.pmini { display: inline-flex; align-items: center; gap: 8px; padding: 4px 10px 4px 6px; background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--card-color, var(--border)); border-radius: 6px; font-size: 12.5px; cursor: pointer; }
+.pmini:hover { border-color: var(--accent); border-left-color: var(--card-color); }
+.pmini.err { border-color: var(--problem); border-left-color: var(--problem); }
+.pmini .w-cpill { font-size: 11px; }
 .proj-title .muted { font-weight: 400; margin-left: 6px; }
 .proj-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 12px; align-items: stretch; }
 .pcard { cursor: default; min-height: 0; gap: 8px; }
@@ -125,13 +134,15 @@ kbd { font: 11px var(--mono); background: var(--surface-2); border: 1px solid va
 .pstack { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--surface-2); }
 .pstack i { display: block; height: 100%; }
 .pstack i + i { border-left: 1px solid var(--surface); }
+.pstack.nodata { opacity: .6; }
 .pdaily { display: flex; align-items: flex-end; gap: 2px; height: 46px; padding: 6px 0 0; border-bottom: 1px solid var(--border); }
 .pday { flex: 1; display: flex; flex-direction: column-reverse; height: 100%; min-width: 0; }
 .pday i { display: block; width: 100%; min-height: 1px; }
 .pday i + i { border-top: 1px solid var(--surface); }
 .pusers { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--ink-2); }
 .puser { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
-.puser i { width: 9px; height: 9px; border-radius: 2px; }
+.puser i { width: 10px; height: 10px; border-radius: 2px; flex: none; box-shadow: inset 0 0 0 1px rgba(0,0,0,.15); }
+.pusers.many { gap: 3px 10px; font-size: 11.5px; }
 .puser small { color: var(--muted); font-variant-numeric: tabular-nums; }
 .puser.me { font-weight: 700; color: var(--ink); }
 .pquota { display: inline-flex; align-items: center; gap: 8px; }

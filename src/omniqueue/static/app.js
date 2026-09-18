@@ -16,6 +16,7 @@
     search: "",
     hiddenClusters: new Set(prefs.hiddenClusters || []),
     windowHours: prefs.windowHours ?? 72,
+    projectsCollapsed: !!prefs.projectsCollapsed,
     selected: null,
     error: null,
     matches: new Map(), // job key -> fuzzy match info for the current search
@@ -37,6 +38,7 @@
     try {
       localStorage.setItem("omniqueue.prefs", JSON.stringify({
         tab: state.tab, sort: state.sort, hiddenClusters: [...state.hiddenClusters], windowHours: state.windowHours,
+        projectsCollapsed: state.projectsCollapsed,
       }));
     } catch { /* ignore */ }
   }
@@ -673,14 +675,18 @@
       state.projects = await res.json();
       renderProjects();
     } catch { /* the cluster cards already show that the server is unreachable */ }
-    if (state.projects?.projects?.some((p) => p.fetching)) setTimeout(fetchProjects, 2000);
+    if (state.projects?.projects?.some((p) => p.fetching || p.backfill_pending)) setTimeout(fetchProjects, p_backfill_ms(state.projects));
   }
+  const p_backfill_ms = (pr) => (pr.projects.some((p) => p.fetching) ? 2000 : 15000); // chunks arrive a minute apart
   async function refreshProjects() {
     try { await post("/api/projects/refresh"); } catch { /* ignore */ }
     $("#proj-status").textContent = "polling the projects…";
     setTimeout(fetchProjects, 700);
   }
-  const USER_COLORS = ["#4f8f8a", "#e2856c", "#b39a4b", "#3a615b", "#c8b47c", "#a9cbc8", "#c9674e", "#8f7a33", "#073a34", "#f3c6b6"];
+  // one colour per person, shared across cards. Neighbours differ in hue *and* lightness so
+  // adjacent bar segments stay apart; no red next to green anywhere.
+  const USER_COLORS = ["#4f8f8a", "#e2856c", "#e0b84a", "#8c6d9e", "#a9cbc8", "#c9674e", "#6f8fb3", "#f3c6b6",
+                       "#3a615b", "#d19a3d", "#b08bbf", "#7fbdb7", "#9c5a44", "#cfc28a", "#4a6fa5", "#e8a48f"];
   const userIndex = new Map();
   function userColor(u) {
     if (!userIndex.has(u)) userIndex.set(u, userIndex.size);
@@ -693,7 +699,7 @@
   function stackBar(parts, total, title) {
     // parts: [[user, value]] sorted; renders a stacked bar with per-user tooltips
     const bar = el("div", { class: "pstack", title });
-    if (!total) { bar.classList.add("empty"); return bar; }
+    if (!total) { bar.classList.add("nodata"); return bar; }
     for (const [u, v] of parts) {
       if (v <= 0) continue;
       bar.append(el("i", { style: `width:${(v / total * 100).toFixed(2)}%;background:${userColor(u)}`, title: `${u}: ${Math.round(v).toLocaleString("en").replace(/,/g, " ")}` }));
@@ -705,11 +711,12 @@
     const color = p.color || clusterColor(p.cluster);
     const card = el("article", { class: "card pcard", style: `--card-color:${color}` });
     const updated = p.updated ? `updated ${clock(p.updated).slice(0, 5)}` : "no data yet";
+    const cover = p.coverage_days == null ? "" : p.backfill_pending ? ` · loading history: ${Math.round(p.coverage_days)} d so far` : ` · ${Math.round(p.coverage_days)} d`;
     card.append(el("div", { class: "pcard-head" },
       el("span", { class: "w-cpill", style: `background:${color};color:#fff` }, p.cluster),
       el("b", {}, p.project),
       el("small", { class: "muted", title: `polled every ${fmtEvery(p.refresh_seconds)} in the background; next ${p.next_poll ? clock(p.next_poll).slice(0, 5) : "–"}` },
-        `${updated} · every ${fmtEvery(p.refresh_seconds)}`)));
+        `${updated} · every ${fmtEvery(p.refresh_seconds)}${cover}`)));
     if (p.error && !p.updated) {
       const kind = p.error_kind || "";
       card.append(el("div", { class: `card-error ${kind}` }, el("span", { class: "warn-icon" }, kind === "login" ? "○" : "⚠"),
@@ -747,14 +754,13 @@
     }
     card.append(chart);
     // user legend
-    const legend = el("div", { class: "pusers" });
-    for (const u of users.slice(0, 8)) {
+    const legend = el("div", { class: `pusers ${users.length > 8 ? "many" : ""}` });
+    for (const u of users) {
       const me = u === p.me;
       const fs = p.shares?.users?.[u]?.fairshare;
       legend.append(el("span", { class: `puser ${me ? "me" : ""}`, title: `${u}: ${Math.round(u30.users[u]?.core_h || 0).toLocaleString("en")} core-h in 30 d` + (fs != null ? `, fairshare ${fs.toFixed(2)}` : "") },
         el("i", { style: `background:${userColor(u)}` }), me ? `${u} (you)` : u, el("small", {}, fmtCoreH(u30.users[u]?.core_h || 0))));
     }
-    if (users.length > 8) legend.append(el("span", { class: "puser muted" }, `+${users.length - 8} more`));
     card.append(legend);
     const foot = el("div", { class: "card-foot" });
     if (p.quota) {
@@ -783,10 +789,29 @@
     for (const p of pr.projects) for (const [u, v] of Object.entries(p.usage["30"].users)) totals.set(u, (totals.get(u) || 0) + v.core_h);
     for (const [u] of [...totals].sort((a, b) => b[1] - a[1])) userColor(u);
     const fetching = pr.projects.some((p) => p.fetching);
-    $("#proj-status").textContent = fetching ? "polling the projects…"
+    const filling = pr.projects.some((p) => p.backfill_pending && !p.error);
+    $("#proj-status").textContent = fetching ? (pr.projects.some((p) => p.backfilling) ? "loading older history…" : "polling the projects…")
+      : filling ? `older history is being loaded in ${pr.backfill_days}-day chunks, a minute apart · polled every ${fmtEvery(pr.refresh_seconds)} · ${pr.history_days} d kept`
       : `who runs how much in your Slurm projects · polled in the background every ${fmtEvery(pr.refresh_seconds)} · ${pr.history_days} d kept`;
     $("#proj-status").classList.toggle("spin", fetching);
-    $("#proj-cards").replaceChildren(...pr.projects.map(projectCard));
+    const collapsed = state.projectsCollapsed;
+    sec.classList.toggle("collapsed", collapsed);
+    $("#proj-toggle").textContent = collapsed ? "▸" : "▾";
+    $("#proj-toggle").title = collapsed ? "show the project cards (p)" : "collapse the project cards (p)";
+    $("#proj-cards").hidden = collapsed;
+    $("#proj-compact").hidden = !collapsed;
+    if (collapsed) {
+      // one pill per project: running jobs and the 30-day usage, enough to see life without the cards
+      $("#proj-compact").replaceChildren(...pr.projects.map((p) => {
+        const color = p.color || clusterColor(p.cluster);
+        const u30 = p.usage["30"];
+        const text = p.error && !p.updated ? "no data" : `${plural(p.running.jobs, "job")} running · ${fmtCoreH(u30.core_h)} core-h / 30 d`;
+        return el("span", { class: `pmini ${p.error && !p.updated ? "err" : ""}`, style: `--card-color:${color}`, title: `${p.cluster} · ${p.project}: ${p.error || text}`, onclick: toggleProjects },
+          el("span", { class: "w-cpill", style: `background:${color};color:#fff` }, p.cluster), el("b", {}, p.project), el("span", { class: "muted" }, text));
+      }));
+    } else {
+      $("#proj-cards").replaceChildren(...pr.projects.map(projectCard));
+    }
     // the predictor's project list follows the configured projects
     const sel = $("#p-project");
     const cur = sel.value;
@@ -803,6 +828,13 @@
     state.projTimer = null;
   }
   $("#proj-refresh").addEventListener("click", refreshProjects);
+  function toggleProjects() {
+    state.projectsCollapsed = !state.projectsCollapsed;
+    savePrefs();
+    renderProjects();
+  }
+  $("#proj-toggle").addEventListener("click", toggleProjects);
+  $(".proj-title").addEventListener("click", toggleProjects);
 
   // ---------- experimental: where to submit? ----------
   // Unlocked by typing `experimental` in the search box (again to hide). The estimate is
@@ -929,6 +961,7 @@
     else if (e.key === "l") { if (state.view === "load") refreshLoad(); else enterLoadView(); }
     else if (e.key === "q") leaveLoadView();
     else if (e.key === "x") enterPredictView();
+    else if (e.key === "p") { if (state.projects?.enabled) toggleProjects(); }
     else if (e.key === "w") openWidget();
     else if (e.key === "e") toggleAllArrays();
     else if (e.key === "Escape") { if (state.selected) closeDrawer(); else leaveLoadView(); }

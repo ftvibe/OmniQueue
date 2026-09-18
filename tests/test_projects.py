@@ -11,7 +11,7 @@ from omniqueue.config import ClusterConfig, Config, ConfigError, config_from_dic
 from omniqueue.history import HistoryStore
 from omniqueue.predict import Request, explain, predict
 from omniqueue.projects import ProjectPoller, ProjectStore, slurm_ts
-from omniqueue.slurm import parse_project_queue, parse_project_sacct, parse_sshare, project_command
+from omniqueue.slurm import parse_project_queue, parse_project_sacct, parse_sshare, project_backfill_command, project_command
 
 NOW = time.mktime((2026, 9, 18, 12, 0, 0, 0, 0, -1))
 
@@ -46,13 +46,18 @@ SQUEUE_ALL_OUT = "501|main|RUNNING|4|128\n502|main|PENDING|2|64\n503_[1-20]|main
 
 class ParserTests(unittest.TestCase):
     def test_command(self):
-        cmd = project_command(["proj-a", "proj-b"], 48, ["main"])
+        cmd = project_command(["proj-a", "proj-b"], NOW - 48 * 3600, ["main"])
         self.assertIn("--account=proj-a,proj-b", cmd)
+        self.assertIn(f"--starttime={_t(48)} --endtime=now", cmd)
         self.assertIn("--accounts=proj-a,proj-b", cmd)
         self.assertIn("sshare --noheader --parsable2 --all", cmd)
         self.assertIn("--allusers", cmd)
         for name in ("squeue_proj", "sacct_proj", "sshare", "sinfo", "squeue_all"):
             self.assertIn(f"@@OMNIQUEUE {name} rc=$?", cmd)
+        chunk = project_backfill_command(["proj-a"], NOW - 10 * 86400, NOW - 3 * 86400)
+        self.assertTrue(chunk.startswith("sacct "))
+        self.assertNotIn("squeue", chunk)
+        self.assertIn(f"--starttime={_t(240)} --endtime={_t(72)}", chunk)
 
     def test_queue(self):
         rows = parse_project_queue(QUEUE_OUT)
@@ -157,9 +162,10 @@ class PollerTests(unittest.TestCase):
         self.env.stop()
         self.tmp.cleanup()
 
-    def _poller(self, **kw):
+    def _poller(self, history_days=90, **kw):
         cfg = Config(clusters=[ClusterConfig(name="here", host="local", projects=["proj-a"], **kw)],
-                     data_dir=Path(self.tmp.name), persist_connections=False, project_refresh_seconds=3600)
+                     data_dir=Path(self.tmp.name), persist_connections=False, project_refresh_seconds=3600,
+                     project_history_days=history_days, project_backfill_days=7)
         collector = Collector(cfg, HistoryStore(Path(self.tmp.name) / "h.json"))
         store = ProjectStore(Path(self.tmp.name) / "p.json")
         return ProjectPoller(cfg, store, collector), store, collector
@@ -170,8 +176,11 @@ class PollerTests(unittest.TestCase):
         poller.refresh([poller.config.clusters[0]])
         st = poller.status["here"]
         self.assertIsNone(st["error"], st)
-        self.assertAlmostEqual(st["next_poll"] - st["last_poll"], 3600, delta=5)
-        self.assertEqual(poller.due(), [])  # not due again for an hour
+        # the first poll covers three days; older history is due as back-fill chunks a minute apart
+        self.assertAlmostEqual(st["coverage_days"], 3, delta=0.01)
+        self.assertTrue(poller.backfill_pending(poller.config.clusters[0]))
+        self.assertAlmostEqual(st["next_poll"] - st["last_poll"], 60, delta=5)
+        self.assertEqual(poller.due(), [])  # not before that minute has passed
         snap = poller.snapshot()
         self.assertTrue(snap["enabled"])
         proj = snap["projects"][0]
@@ -186,6 +195,34 @@ class PollerTests(unittest.TestCase):
         self.assertEqual([c.name for c in poller.due()], ["here"])
         poller.refresh()
         self.assertNotEqual(poller.etag(), etag)
+
+    def test_backfill_chunks(self):
+        calls: list[str] = []
+        _fake_bin(self.bin, "sacct", f"echo \"$*\" >> {self.tmp.name}/sacct.log; cat <<'X'\n{SACCT_OUT}X\n")
+        poller, store, _ = self._poller(history_days=20)
+        cluster = poller.config.clusters[0]
+        poller.refresh([cluster])
+        self.assertAlmostEqual(poller.coverage_days(cluster), 3, delta=0.01)
+        # each further chunk is sacct only and moves the coverage back by 7 days, capped at history_days
+        poller.refresh([cluster])
+        self.assertAlmostEqual(poller.coverage_days(cluster), 10, delta=0.01)
+        self.assertTrue(poller.status["here"]["backfilling"] is False and poller.backfill_pending(cluster))
+        poller.backfill_all(progress=lambda todo: calls.append(todo[0].name))
+        self.assertAlmostEqual(poller.coverage_days(cluster), 20, delta=0.01)
+        self.assertFalse(poller.backfill_pending(cluster))
+        self.assertEqual(calls, ["here", "here"])  # 10 -> 17 -> 20 days
+        log = (Path(self.tmp.name) / "sacct.log").read_text().splitlines()
+        self.assertEqual(len(log), 4)
+        self.assertIn("--endtime=now", log[0])
+        self.assertNotIn("--endtime=now", log[1])  # chunks have an explicit end
+        # once complete the next poll is a regular one, an hour after the last
+        self.assertAlmostEqual(poller.status["here"]["next_poll"] - store.last_poll("here"), 3600, delta=5)
+        # a later regular poll asks only for the time since the previous one (plus a day)
+        store.data["meta"]["last_poll"]["here"] = time.time() - 7200
+        self.assertAlmostEqual(time.time() - poller.window_start(cluster, time.time()), 7200 + 86400, delta=5)
+        snap = poller.snapshot()
+        self.assertFalse(snap["projects"][0]["backfill_pending"])
+        self.assertAlmostEqual(snap["projects"][0]["coverage_days"], 20, delta=0.1)
 
     def test_login_gate(self):
         poller, _, collector = self._poller()

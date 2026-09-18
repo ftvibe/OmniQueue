@@ -179,7 +179,7 @@ def demo_config() -> Config:
     return Config(
         logo_dir=logo_dir,
         clusters=[
-            ClusterConfig(name="tetralith", host="tetralith.nsc.liu.se", color="#5f9e99", projects=["naiss2025-1-42"],
+            ClusterConfig(name="tetralith", host="tetralith.nsc.liu.se", color="#5f9e99", projects=["naiss2025-1-42", "naiss2025-22-8"],
                           project_quotas={"naiss2025-1-42": 120000}, nice=0),
             ClusterConfig(name="dardel", host="dardel.pdc.kth.se", color="#e2856c", load_partitions=["main", "gpu"],
                           projects=["naiss2025-3-7"], project_refresh_seconds=3600, nice=2000),
@@ -192,22 +192,25 @@ def demo_config() -> Config:
 
 # ---- demo projects ------------------------------------------------------------------------
 _DEMO_PROJECTS = {"tetralith": ["naiss2025-1-42"], "dardel": ["naiss2025-3-7"], "lumi": ["project_465000123"]}
-_DEMO_USERS = ["demo", "x_annli", "x_johsm", "x_marle", "x_petbe", "x_saraw"]
+_DEMO_USERS = ["demo", "x_annli", "x_johsm", "x_marle", "x_petbe", "x_saraw", "x_tomek", "x_linwu", "x_eriks", "x_nadia", "x_olafb", "x_yukik"]
 
 
-def _demo_project_rows(cluster: str, project: str, rng: random.Random, now: float, days: int = 60) -> tuple[list[dict], list[dict]]:
-    """Fabricated sacct rows over `days` days plus the queue right now, for one project."""
-    weights = [0.32, 0.25, 0.18, 0.12, 0.08, 0.05]
+def _demo_project_rows(cluster: str, project: str, rng: random.Random, now: float, days: float = 3,
+                       end: float | None = None) -> tuple[list[dict], list[dict]]:
+    """Fabricated sacct rows for the `days` before `end` (default now) plus, when `end`
+    is None, the queue right now, for one project."""
+    weights = [0.22, 0.17, 0.13, 0.1, 0.08, 0.07, 0.06, 0.05, 0.04, 0.03, 0.03, 0.02]
     parts = {"tetralith": ("main", 32, 1), "dardel": ("main", 128, 1), "lumi": ("standard", 256, 2)}
     part, cpn, tpc = parts.get(cluster, ("batch", 64, 1))
     sacct: list[dict] = []
     base = rng.randint(100000, 800000)
-    n_jobs = int(days * rng.uniform(3, 7))
+    n_jobs = max(1, int(days * rng.uniform(3, 7)))
+    upto = end if end is not None else now
     for i in range(n_jobs):
         user = rng.choices(_DEMO_USERS, weights)[0]
         nodes = rng.choice([1, 1, 1, 1, 2, 2, 4, 8])
         hours = rng.choice([0.5, 1, 2, 4, 8, 12, 24])
-        start = now - rng.uniform(0, days * 86400)
+        start = upto - rng.uniform(0, days * 86400)
         elapsed = int(hours * 3600 * rng.uniform(0.3, 1.0))
         end = start + elapsed
         state = "COMPLETED" if rng.random() < 0.85 else rng.choice(["FAILED", "TIMEOUT", "CANCELLED"])
@@ -221,6 +224,8 @@ def _demo_project_rows(cluster: str, project: str, rng: random.Random, now: floa
             "time_limit_s": int(hours * 3600),
         })
     queue: list[dict] = []
+    if end is not None:
+        return sacct, queue
     for r in sacct:
         if r["state"] == "RUNNING":
             queue.append({"job_id": r["job_id"], "account": project, "user": r["user"], "state": "RUNNING", "partition": part,
@@ -254,19 +259,34 @@ class DemoProjectPoller(ProjectPoller):
         super().__init__(config, store, collector)
         self._rng = random.Random(seed)
 
-    def fetch(self, cluster: ClusterConfig):
+    def _offline(self, cluster: ClusterConfig) -> None:
         time.sleep(self._rng.uniform(0.2, 0.6))
         if cluster.name == "offline-cluster":
             from .ssh import RemoteError
 
             raise RemoteError("ssh failed: connect to host unreachable.example.org port 22: Connection timed out", kind="network")
+
+    def fetch_backfill(self, cluster: ClusterConfig, start_ts: float, end_ts: float):
+        self._offline(cluster)
+        rows: list[dict] = []
+        for proj in cluster.projects:
+            if proj == "naiss2025-22-8":
+                continue
+            rows += _demo_project_rows(cluster.name, proj, self._rng, time.time(), days=(end_ts - start_ts) / 86400, end=end_ts)[0]
+        return rows
+
+    def fetch(self, cluster: ClusterConfig, start_ts: float):
+        self._offline(cluster)
         now = time.time()
         sacct_all: list[dict] = []
         queue_all: list[dict] = []
         sshare_all: list[dict] = []
         first = self.store.last_poll(cluster.name) is None
         for proj in cluster.projects:
-            sacct, queue = _demo_project_rows(cluster.name, proj, self._rng, now, days=60 if first else 2)
+            if proj == "naiss2025-22-8":  # an idle project: nothing running, nothing in the accounting
+                sshare_all += _demo_sshare(proj, self._rng)
+                continue
+            sacct, queue = _demo_project_rows(cluster.name, proj, self._rng, now, days=(now - start_ts) / 86400)
             sacct_all += sacct
             queue_all += queue
             sshare_all += _demo_sshare(proj, self._rng)
