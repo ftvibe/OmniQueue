@@ -42,6 +42,22 @@ def _load(args) -> Config:
     return load_config(Path(args.config) if args.config else None)
 
 
+def _select(clusters, names) -> tuple[list, list[str]]:
+    """The clusters named on the command line (any letter case), and the names that match
+    nothing.  No names: all of them."""
+    if not names:
+        return list(clusters), []
+    by_name = {c.name.lower(): c for c in clusters}
+    picked, unknown = [], []
+    for n in names:
+        c = by_name.get(n.lower())
+        if c is None:
+            unknown.append(n)
+        elif c not in picked:
+            picked.append(c)
+    return picked, unknown
+
+
 def _collector(cfg: Config, args) -> Collector:
     history = HistoryStore(cfg.data_dir / ("history-demo.json" if getattr(args, "demo", False) else "history.json"),
                            cfg.history_days)
@@ -181,14 +197,13 @@ def cmd_login(args) -> int:
     if not cfg.persist_connections:
         print("persist_connections is false in the config; nothing to keep open.", file=sys.stderr)
         return 2
-    wanted = set(args.cluster or [])
-    unknown = wanted - {c.name for c in cfg.clusters}
+    picked, unknown = _select(cfg.clusters, args.cluster)
     if unknown:
-        print(f"unknown cluster(s): {', '.join(sorted(unknown))}", file=sys.stderr)
+        print(f"unknown cluster(s): {', '.join(unknown)}", file=sys.stderr)
         return 2
     rc = 0
     for c in cfg.enabled_clusters:
-        if wanted and c.name not in wanted:
+        if args.cluster and c not in picked:
             continue
         if c.is_local:
             continue
@@ -327,10 +342,9 @@ def cmd_check(args) -> int:
     for w in _perm_warnings(cfg, args):
         print(f"[warn]  {w}")
     if getattr(args, "raw", False):
-        wanted = set(args.cluster or [])
-        clusters = [c for c in cfg.enabled_clusters if not wanted or c.name in wanted]
-        if not clusters:
-            print("no such cluster; configured: " + ", ".join(c.name for c in cfg.enabled_clusters))
+        clusters, unknown = _select(cfg.enabled_clusters, args.cluster)
+        if unknown or not clusters:
+            print("no such cluster: " + ", ".join(unknown) + "; configured: " + ", ".join(c.name for c in cfg.enabled_clusters))
             return 2
         return _raw_check(cfg, clusters, max(cfg.ssh_timeout, cfg.project_timeout))
     collector = _collector(cfg, args)
@@ -368,13 +382,12 @@ def cmd_projects(args) -> int:
         else:
             print("no cluster lists `projects` in the config; add e.g. projects = [\"naiss2025-1-23\"] to a [[clusters]] entry")
         return 2
-    wanted = set(getattr(args, "cluster", None) or [])
-    unknown = wanted - {c.name for c in cfg.project_clusters}
+    clusters, unknown = _select(cfg.project_clusters, getattr(args, "cluster", None))
     if unknown:
-        print("no project cluster named " + ", ".join(sorted(unknown)) + "; clusters with projects: "
+        print("no project cluster named " + ", ".join(unknown) + "; clusters with projects: "
               + ", ".join(c.name for c in cfg.project_clusters))
         return 2
-    clusters = [c for c in cfg.project_clusters if not wanted or c.name in wanted]
+    wanted = {c.name for c in clusters} if getattr(args, "cluster", None) else set()
     if args.poll:
         poller.refresh(clusters)
 
@@ -443,8 +456,10 @@ def cmd_usage(args) -> int:
 
     cfg = _load(args)
     history = HistoryStore(cfg.data_dir / ("history-demo.json" if getattr(args, "demo", False) else "history.json"), cfg.history_days)
-    wanted = set(args.cluster or [])
-    clusters = [c for c in cfg.enabled_clusters if not wanted or c.name in wanted]
+    clusters, unknown = _select(cfg.enabled_clusters, args.cluster)
+    if unknown:
+        print("no such cluster: " + ", ".join(unknown) + "; configured: " + ", ".join(c.name for c in cfg.enabled_clusters))
+        return 2
     print(f"mode = {cfg.mode} · history: {history.path} ({len(history.all_jobs())} jobs)")
     jobs_by = {c.name: history.jobs_for(c.name) for c in clusters}
     gpn = {c.name: history.partition_gres(c.name) for c in clusters}

@@ -93,7 +93,7 @@ def predict(request: Request, data: dict[str, Any]) -> dict[str, Any]:
     excluded: list[Candidate] = []
     notes: list[str] = []
     for cname, cl in data.get("clusters", {}).items():
-        if request.clusters and cname not in request.clusters:
+        if request.clusters and cname.lower() not in {c.lower() for c in request.clusters}:
             continue
         nice = int(cl.get("nice") or 0)
         interval = float(cl.get("interval") or 7200)
