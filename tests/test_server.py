@@ -5,8 +5,9 @@ import unittest
 import urllib.request
 from pathlib import Path
 
-from omniqueue.demo import DemoCollector, demo_config
+from omniqueue.demo import DemoCollector, DemoProjectPoller, demo_config
 from omniqueue.history import HistoryStore
+from omniqueue.projects import ProjectStore
 from omniqueue.server import make_server
 
 
@@ -17,7 +18,9 @@ class ServerTests(unittest.TestCase):
         cfg = demo_config()
         cls.collector = DemoCollector(cfg, HistoryStore(Path(cls.tmp.name) / "h.json"))
         cls.collector.refresh()
-        cls.server = make_server(cls.collector, "127.0.0.1", 0)
+        cls.projects = DemoProjectPoller(cfg, ProjectStore(Path(cls.tmp.name) / "p.json"), cls.collector)
+        cls.projects.refresh(cfg.project_clusters)
+        cls.server = make_server(cls.collector, "127.0.0.1", 0, projects=cls.projects)
         cls.port = cls.server.server_address[1]
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
@@ -142,6 +145,51 @@ class ServerTests(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as cm:
             self.get("/../pyproject.toml")
         self.assertEqual(cm.exception.code, 404)
+
+    def _token(self):
+        page = self.get("/")[2]
+        return page.split(b'name="omniqueue-token" content="')[1].split(b'"')[0].decode()
+
+    def test_projects_endpoints(self):
+        status, ctype, body = self.get("/api/projects")
+        self.assertEqual(status, 200)
+        pr = json.loads(body)
+        self.assertTrue(pr["enabled"])
+        by = {p["project"]: p for p in pr["projects"]}
+        self.assertIn("naiss2025-1-42", by)
+        self.assertGreater(by["naiss2025-1-42"]["usage"]["30"]["core_h"], 0)
+        self.assertEqual(by["naiss2025-1-42"]["quota"]["source"], "config")
+        self.assertEqual(by["naiss2025-9-9"]["error_kind"], "network")
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/projects/refresh", method="POST",
+                                     headers={"X-OmniQueue-Token": self._token()})
+        with urllib.request.urlopen(req) as r:
+            self.assertEqual(json.loads(r.read())["started"], True)
+        # the index page carries the projects section and the (hidden) experimental controls
+        page = self.get("/")[2]
+        self.assertIn(b'id="projects"', page)
+        self.assertIn(b'id="predict-toggle"', page)
+
+    def test_predict_endpoint(self):
+        body = json.dumps({"nodes": 2, "hours": 3, "projects": ["naiss2025-1-42"]}).encode()
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/experimental/predict", data=body, method="POST",
+                                     headers={"X-OmniQueue-Token": self._token(), "Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as r:
+            res = json.loads(r.read())
+        self.assertEqual(res["request"]["nodes"], 2)
+        self.assertTrue(res["candidates"])
+        self.assertTrue(all(c["cluster"] == "tetralith" for c in res["candidates"]))
+        self.assertIn("estimated_wait_h", res["candidates"][0])
+        # without the CSRF token the endpoint refuses
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/experimental/predict", data=body, method="POST")
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(req)
+        self.assertEqual(cm.exception.code, 403)
+        # garbage numbers -> 400
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/experimental/predict", data=b'{"nodes": "x"}', method="POST",
+                                     headers={"X-OmniQueue-Token": self._token()})
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(req)
+        self.assertEqual(cm.exception.code, 400)
 
     def test_refresh(self):
         page = self.get("/")[2]

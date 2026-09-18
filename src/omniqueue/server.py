@@ -14,6 +14,8 @@ from importlib import resources
 from urllib.parse import parse_qs, urlparse
 
 from .collector import Collector
+from .predict import Request, predict
+from .projects import ProjectPoller
 
 log = logging.getLogger("omniqueue.server")
 
@@ -36,6 +38,7 @@ COOKIE = "omniqueue_access"
 
 class Handler(BaseHTTPRequestHandler):
     collector: Collector  # set on the class by make_server
+    projects: ProjectPoller | None  # slow project poller (None when no cluster lists projects)
     csrf_token: str  # per-process secret embedded in the page; required on every POST
     access_token: str | None  # from the config; required on every request when set
     server_version = "OmniQueue/0.1"
@@ -111,6 +114,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/load":
             self._json_if_changed(self.collector.load_etag(), self.collector.load_snapshot)
             return
+        if path == "/api/projects":
+            if self.projects is None:
+                self._json({"now": 0, "enabled": False, "clusters": [], "projects": []})
+                return
+            self._json_if_changed(self.projects.etag(), self.projects.snapshot)
+            return
         if path == "/api/health":
             self._json({"ok": True})
             return
@@ -170,6 +179,13 @@ class Handler(BaseHTTPRequestHandler):
             started = self.collector.request_load()
             self._json({"ok": True, "started": started})
             return
+        if path == "/api/projects/refresh":
+            started = self.projects.request_refresh() if self.projects else False
+            self._json({"ok": True, "started": started})
+            return
+        if path == "/api/experimental/predict":
+            self._predict()
+            return
         if path.startswith("/api/forget/"):
             key = path[len("/api/forget/"):]
             removed = self.collector.history.forget(key)
@@ -179,9 +195,46 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
 
-def make_server(collector: Collector, host: str, port: int, access_token: str | None = None) -> ThreadingHTTPServer:
+    def _body(self, limit: int = 64 * 1024) -> dict:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        if length <= 0 or length > limit:
+            return {}
+        try:
+            data = json.loads(self.rfile.read(length).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _predict(self) -> None:
+        """Experimental: rank clusters/partitions by estimated queue wait for a job."""
+        body = self._body()
+        try:
+            req = Request(
+                nodes=max(1, int(body.get("nodes", 1))),
+                hours=max(0.01, float(body.get("hours", 1))),
+                cores=(max(1, int(body["cores"])) if body.get("cores") else None),
+                projects=[str(x)[:64] for x in body["projects"]][:32] if isinstance(body.get("projects"), list) and body["projects"] else None,
+                clusters=[str(x)[:64] for x in body["clusters"]][:32] if isinstance(body.get("clusters"), list) and body["clusters"] else None,
+                partitions=[str(x)[:64] for x in body["partitions"]][:32] if isinstance(body.get("partitions"), list) and body["partitions"] else None,
+            )
+        except (TypeError, ValueError):
+            self._json({"error": "nodes, hours and cores must be numbers"}, HTTPStatus.BAD_REQUEST)
+            return
+        if self.projects is None:
+            self._json({"request": req.__dict__, "candidates": [], "excluded": [],
+                        "notes": ["no cluster lists `projects` in the config, so no load samples are collected"]})
+            return
+        self._json(predict(req, self.projects.prediction_data()))
+
+
+def make_server(collector: Collector, host: str, port: int, access_token: str | None = None,
+                projects: ProjectPoller | None = None) -> ThreadingHTTPServer:
     handler = type("BoundHandler", (Handler,), {
         "collector": collector,
+        "projects": projects,
         "csrf_token": secrets.token_urlsafe(32),
         "access_token": access_token,
     })

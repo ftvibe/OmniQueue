@@ -458,3 +458,107 @@ def merge_jobs(squeue_jobs: list[Job], sacct_jobs: list[Job]) -> list[Job]:
                 j.account = prev.account
         by_id[j.job_id] = j
     return list(by_id.values())
+
+
+# ---- project usage (slow poll, all users of a project) --------------------------------
+# squeue for every job of the configured projects: id, account, user, state, partition,
+# nodes, cpus, time limit, elapsed.  sacct for the finished/running ones; CPUTimeRAW is
+# elapsed x allocated CPUs in seconds (Slurm CPUs: threads on hyperthreaded clusters).
+PROJECT_SQUEUE_FIELDS = "%i|%a|%u|%T|%P|%D|%C|%l|%M"
+PROJECT_SACCT_FIELDS = ["JobID", "Account", "User", "Partition", "State", "AllocNodes", "AllocCPUS",
+                        "ElapsedRaw", "CPUTimeRAW", "Submit", "Start", "End", "Timelimit"]
+SSHARE_FIELDS = ["Account", "User", "RawShares", "NormShares", "RawUsage", "EffectvUsage", "FairShare",
+                 "GrpTRESMins", "GrpTRESRaw", "TRESRunMins"]
+
+
+def project_command(projects: list[str], lookback_hours: int, partitions: list[str] | None = None) -> str:
+    """Everything one project poll needs, in one ssh round trip: the projects' queue,
+    their accounting since `lookback_hours`, fairshare/usage from sshare, and a load
+    sample (sinfo + all-users squeue) for the predictor."""
+    accounts = shlex.quote(",".join(projects))
+    start = (datetime.now() - timedelta(hours=lookback_hours)).strftime("%Y-%m-%dT%H:%M:%S")
+    parts = [
+        f"squeue --noheader --states=RUNNING,PENDING --account={accounts} --format={shlex.quote(PROJECT_SQUEUE_FIELDS)}",
+        f'echo "{MARK} squeue_proj rc=$?"',
+        f"sacct --noheader --parsable2 --allocations --allusers --accounts={accounts} --starttime={start} "
+        f"--endtime=now --format={','.join(PROJECT_SACCT_FIELDS)}",
+        f'echo "{MARK} sacct_proj rc=$?"',
+        f"sshare --noheader --parsable2 --all --accounts={accounts} --format={','.join(SSHARE_FIELDS)}",
+        f'echo "{MARK} sshare rc=$?"',
+        sinfo_command(partitions), f'echo "{MARK} sinfo rc=$?"',
+        squeue_all_command(partitions), f'echo "{MARK} squeue_all rc=$?"',
+    ]
+    return "; ".join(parts)
+
+
+def parse_project_queue(output: str) -> list[dict]:
+    """Rows of the projects' squeue: one dict per (array) job with a task count."""
+    rows: list[dict] = []
+    for line in output.splitlines():
+        cols = [c.strip() for c in line.split("|")]
+        if len(cols) < 9 or not cols[0]:
+            continue
+        job_id, account, user, state, partition, nodes, cpus, limit, elapsed = cols[:9]
+        rows.append({
+            "job_id": job_id, "account": account, "user": user, "state": normalize_state(state),
+            "partition": partition, "nodes": _int(nodes), "cpus": _int(cpus),
+            "time_limit_s": parse_duration(limit), "elapsed_s": parse_duration(elapsed) or 0,
+            "tasks": array_task_count(job_id),
+        })
+    return rows
+
+
+def parse_project_sacct(output: str) -> list[dict]:
+    """Rows of the projects' sacct (allocations only) as plain dicts keyed for the store."""
+    rows: list[dict] = []
+    for line in output.splitlines():
+        cols = [c.strip() for c in line.split("|")]
+        if len(cols) < 13 or not cols[0]:
+            continue
+        job_id, account, user, partition, state, nodes, cpus, elapsed, cputime, submit, start, end, limit = cols[:13]
+        rows.append({
+            "job_id": job_id, "account": account, "user": user, "partition": partition,
+            "state": normalize_state(state), "nodes": _int(nodes), "cpus": _int(cpus),
+            "elapsed_s": _int(elapsed), "cpu_s": _int(cputime),
+            "submit": _clean_time(submit), "start": _clean_time(start), "end": _clean_time(end),
+            "time_limit_s": parse_duration(limit),
+        })
+    return rows
+
+
+def _tres(text: str) -> dict[str, int]:
+    """``cpu=1200,mem=0,node=3`` -> {"cpu": 1200, ...}."""
+    out: dict[str, int] = {}
+    for chunk in text.split(","):
+        k, sep, v = chunk.partition("=")
+        if sep:
+            try:
+                out[k.strip()] = int(float(v))
+            except ValueError:
+                continue
+    return out
+
+
+def _float(text: str) -> float | None:
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_sshare(output: str) -> list[dict]:
+    """sshare rows: the account line has an empty User, user lines carry the user."""
+    rows: list[dict] = []
+    for line in output.splitlines():
+        cols = [c.strip() for c in line.split("|")]
+        if len(cols) < 7 or not cols[0]:
+            continue
+        cols += [""] * (len(SSHARE_FIELDS) - len(cols))
+        account, user, raw_shares, norm_shares, raw_usage, eff_usage, fairshare, grp_mins, grp_raw, run_mins = cols[:10]
+        rows.append({
+            "account": account.lstrip(" "), "user": user,
+            "raw_shares": _int(raw_shares), "norm_shares": _float(norm_shares),
+            "raw_usage": _int(raw_usage), "effective_usage": _float(eff_usage), "fairshare": _float(fairshare),
+            "grp_tres_mins": _tres(grp_mins), "grp_tres_raw": _tres(grp_raw), "tres_run_mins": _tres(run_mins),
+        })
+    return rows

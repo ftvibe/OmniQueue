@@ -20,9 +20,13 @@
     error: null,
     matches: new Map(), // job key -> fuzzy match info for the current search
     expanded: new Set(), // array groups opened to show their tasks
-    view: "jobs", // "jobs" | "load"; the load view is entered explicitly and fetched on demand
+    view: "jobs", // "jobs" | "load" | "predict"; load and predict are entered explicitly
     load: null, // last /api/load answer
     loadTimer: null,
+    projects: null, // last /api/projects answer (slow background poll, own card row)
+    projTimer: null,
+    experimental: (() => { try { return localStorage.getItem("omniqueue.experimental") === "1"; } catch { return false; } })(),
+    prediction: null,
   };
 
   // ---------- helpers ----------
@@ -259,12 +263,15 @@
   }
 
   function renderView() {
-    const load = state.view === "load";
+    const load = state.view === "load", predict = state.view === "predict";
     $("#load").hidden = !load;
-    $("#jobs-view").hidden = load;
+    $("#predict").hidden = !predict;
+    $("#jobs-view").hidden = load || predict;
     $("#view-toggle").classList.toggle("active", load);
-    for (const b of $$("#tabs button[data-tab]")) b.disabled = load;
-    if (load) renderLoad(); else renderTable();
+    $("#predict-toggle").classList.toggle("active", predict);
+    $("#predict-toggle").hidden = !state.experimental;
+    for (const b of $$("#tabs button[data-tab]")) b.disabled = load || predict;
+    if (load) renderLoad(); else if (predict) renderPredict(); else renderTable();
   }
 
   // `l`: enter the load view and fetch; `l` again (or the button): fetch again. `q`: back to the queue.
@@ -275,7 +282,7 @@
     refreshLoad();
   }
   function leaveLoadView() {
-    if (state.view !== "load") return;
+    if (state.view === "jobs") return;
     state.view = "jobs";
     stopLoadPolling();
     renderView();
@@ -652,6 +659,220 @@
     return fmtDuration((st - s) / 1000);
   }
 
+  // ---------- projects (slow background poll, own card row) ----------
+  // The server polls each cluster's projects every few hours on its own; the page only
+  // re-reads the result (a 304 when nothing changed) and never triggers cluster work itself.
+  let projEtag = null;
+  const PROJ_POLL_MS = 60000;
+  async function fetchProjects() {
+    try {
+      const res = await fetch("/api/projects", { cache: "no-store", headers: projEtag ? { "If-None-Match": projEtag } : {} });
+      if (res.status === 304) return;
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      projEtag = res.headers.get("ETag");
+      state.projects = await res.json();
+      renderProjects();
+    } catch { /* the cluster cards already show that the server is unreachable */ }
+    if (state.projects?.projects?.some((p) => p.fetching)) setTimeout(fetchProjects, 2000);
+  }
+  async function refreshProjects() {
+    try { await post("/api/projects/refresh"); } catch { /* ignore */ }
+    $("#proj-status").textContent = "polling the projects…";
+    setTimeout(fetchProjects, 700);
+  }
+  const USER_COLORS = ["#4f8f8a", "#e2856c", "#b39a4b", "#3a615b", "#c8b47c", "#a9cbc8", "#c9674e", "#8f7a33", "#073a34", "#f3c6b6"];
+  const userIndex = new Map();
+  function userColor(u) {
+    if (!userIndex.has(u)) userIndex.set(u, userIndex.size);
+    return USER_COLORS[userIndex.get(u) % USER_COLORS.length];
+  }
+  const fmtCoreH = (x) => (x >= 10000 ? `${(x / 1000).toFixed(0)}k` : x >= 1000 ? `${(x / 1000).toFixed(1)}k` : `${Math.round(x)}`);
+  function fmtEvery(s) { return s % 3600 === 0 ? `${s / 3600} h` : `${Math.round(s / 60)} min`; }
+  const plural = (n, word) => `${fmtInt(n)} ${word}${n === 1 ? "" : "s"}`;
+
+  function stackBar(parts, total, title) {
+    // parts: [[user, value]] sorted; renders a stacked bar with per-user tooltips
+    const bar = el("div", { class: "pstack", title });
+    if (!total) { bar.classList.add("empty"); return bar; }
+    for (const [u, v] of parts) {
+      if (v <= 0) continue;
+      bar.append(el("i", { style: `width:${(v / total * 100).toFixed(2)}%;background:${userColor(u)}`, title: `${u}: ${Math.round(v).toLocaleString("en").replace(/,/g, " ")}` }));
+    }
+    return bar;
+  }
+
+  function projectCard(p) {
+    const color = p.color || clusterColor(p.cluster);
+    const card = el("article", { class: "card pcard", style: `--card-color:${color}` });
+    const updated = p.updated ? `updated ${clock(p.updated).slice(0, 5)}` : "no data yet";
+    card.append(el("div", { class: "pcard-head" },
+      el("span", { class: "w-cpill", style: `background:${color};color:#fff` }, p.cluster),
+      el("b", {}, p.project),
+      el("small", { class: "muted", title: `polled every ${fmtEvery(p.refresh_seconds)} in the background; next ${p.next_poll ? clock(p.next_poll).slice(0, 5) : "–"}` },
+        `${updated} · every ${fmtEvery(p.refresh_seconds)}`)));
+    if (p.error && !p.updated) {
+      const kind = p.error_kind || "";
+      card.append(el("div", { class: `card-error ${kind}` }, el("span", { class: "warn-icon" }, kind === "login" ? "○" : "⚠"),
+        el("span", {}, kind === "login" ? "not logged in: run omniqueue login to start collecting" : p.error)));
+      return card;
+    }
+    const u30 = p.usage["30"], u7 = p.usage["7"];
+    const users = p.users.slice();
+    const runParts = users.map((u) => [u, p.running.users[u]?.cores || 0]).filter(([, v]) => v > 0);
+    const useParts = users.map((u) => [u, u30.users[u]?.core_h || 0]).filter(([, v]) => v > 0);
+    const rows = el("div", { class: "prows" });
+    rows.append(
+      el("div", { class: "prow" }, el("span", { class: "plabel" }, "running now"),
+        el("span", { class: "pval", title: `${p.running.jobs} running jobs on ${p.running.nodes} nodes, ${p.pending.jobs} waiting (${Math.round(p.pending.cores)} cores asked for)` },
+          `${plural(p.running.jobs, "job")} · ${fmtInt(Math.round(p.running.cores))} cores`,
+          p.pending.jobs ? el("span", { class: "muted" }, ` · ${fmtInt(p.pending.jobs)} waiting`) : null),
+        stackBar(runParts, p.running.cores, "cores in use right now, by user")),
+      el("div", { class: "prow" }, el("span", { class: "plabel" }, "last 30 d"),
+        el("span", { class: "pval", title: `${Math.round(u30.core_h).toLocaleString("en")} core-hours in ${u30.jobs} jobs over 30 days; ${Math.round(u7.core_h).toLocaleString("en")} in the last 7 days` },
+          `${fmtCoreH(u30.core_h)} core-h · ${plural(u30.jobs, "job")}`,
+          el("span", { class: "muted" }, ` · 7 d ${fmtCoreH(u7.core_h)}`)),
+        stackBar(useParts, u30.core_h, "core-hours in the last 30 days, by user")));
+    card.append(rows);
+    // daily core-hours, stacked by user
+    const daily = p.daily || [];
+    const max = Math.max(1, ...daily.map((d) => d.core_h));
+    const chart = el("div", { class: "pdaily", title: "core-hours per day, last 30 days" });
+    for (const d of daily) {
+      const col = el("div", { class: "pday", title: `${d.date}: ${Math.round(d.core_h).toLocaleString("en").replace(/,/g, " ")} core-h` });
+      for (const u of users) {
+        const v = d.users[u] || 0;
+        if (v > 0) col.append(el("i", { style: `height:${(v / max * 100).toFixed(1)}%;background:${userColor(u)}` }));
+      }
+      chart.append(col);
+    }
+    card.append(chart);
+    // user legend
+    const legend = el("div", { class: "pusers" });
+    for (const u of users.slice(0, 8)) {
+      const me = u === p.me;
+      const fs = p.shares?.users?.[u]?.fairshare;
+      legend.append(el("span", { class: `puser ${me ? "me" : ""}`, title: `${u}: ${Math.round(u30.users[u]?.core_h || 0).toLocaleString("en")} core-h in 30 d` + (fs != null ? `, fairshare ${fs.toFixed(2)}` : "") },
+        el("i", { style: `background:${userColor(u)}` }), me ? `${u} (you)` : u, el("small", {}, fmtCoreH(u30.users[u]?.core_h || 0))));
+    }
+    if (users.length > 8) legend.append(el("span", { class: "puser muted" }, `+${users.length - 8} more`));
+    card.append(legend);
+    const foot = el("div", { class: "card-foot" });
+    if (p.quota) {
+      const frac = p.quota.fraction ?? 0;
+      foot.append(el("span", { class: "pquota", title: `${p.quota.window === "30 d" ? "core-hours used in the last 30 days against the configured monthly quota" : "Slurm accounting limit from sshare (GrpTRESMins)"}` },
+        el("span", { class: "gauge-bar " + (frac > 0.9 ? "hot" : "") }, el("i", { style: `width:${(frac * 100).toFixed(1)}%` })),
+        `${fmtCoreH(p.quota.used_core_h)} / ${fmtCoreH(p.quota.limit_core_h)} core-h (${p.quota.window})`));
+    }
+    if (p.shares?.fairshare != null) {
+      const mine = p.shares.users?.[p.me]?.fairshare;
+      foot.append(el("span", { title: "Slurm fairshare factor: 1 = front of the queue, 0 = back" },
+        `fairshare ${p.shares.fairshare.toFixed(2)}${mine != null ? ` · yours ${mine.toFixed(2)}` : ""}`));
+    }
+    if (foot.childElementCount) card.append(foot);
+    if (p.warning || (p.error && p.updated)) card.append(el("div", { class: "card-warn" }, p.error ? `last poll failed: ${p.error}` : p.warning));
+    return card;
+  }
+
+  function renderProjects() {
+    const pr = state.projects;
+    const sec = $("#projects");
+    if (!pr || !pr.enabled) { sec.hidden = true; return; }
+    sec.hidden = false;
+    // colour users by overall usage so the same person keeps their colour across cards
+    const totals = new Map();
+    for (const p of pr.projects) for (const [u, v] of Object.entries(p.usage["30"].users)) totals.set(u, (totals.get(u) || 0) + v.core_h);
+    for (const [u] of [...totals].sort((a, b) => b[1] - a[1])) userColor(u);
+    const fetching = pr.projects.some((p) => p.fetching);
+    $("#proj-status").textContent = fetching ? "polling the projects…"
+      : `who runs how much in your Slurm projects · polled in the background every ${fmtEvery(pr.refresh_seconds)} · ${pr.history_days} d kept`;
+    $("#proj-status").classList.toggle("spin", fetching);
+    $("#proj-cards").replaceChildren(...pr.projects.map(projectCard));
+    // the predictor's project list follows the configured projects
+    const sel = $("#p-project");
+    const cur = sel.value;
+    sel.replaceChildren(el("option", { value: "" }, "any"), ...pr.projects.map((p) => el("option", { value: p.project }, `${p.project} (${p.cluster})`)));
+    sel.value = cur;
+  }
+  function startProjectPolling() {
+    if (state.projTimer) return;
+    fetchProjects();
+    state.projTimer = setInterval(fetchProjects, PROJ_POLL_MS);
+  }
+  function stopProjectPolling() {
+    if (state.projTimer) clearInterval(state.projTimer);
+    state.projTimer = null;
+  }
+  $("#proj-refresh").addEventListener("click", refreshProjects);
+
+  // ---------- experimental: where to submit? ----------
+  // Unlocked by typing `experimental` in the search box (again to hide). The estimate is
+  // computed server-side by omniqueue.predict from the samples the project poll stores.
+  function setExperimental(on) {
+    state.experimental = on;
+    try { localStorage.setItem("omniqueue.experimental", on ? "1" : "0"); } catch { /* ignore */ }
+    if (!on && state.view === "predict") state.view = "jobs";
+    renderView();
+    $("#summary-line").textContent = on ? "experimental features on: press x for “where to submit?”" : "experimental features off";
+  }
+  function enterPredictView() {
+    if (!state.experimental) return;
+    state.view = "predict";
+    closeDrawer();
+    renderView();
+  }
+  async function runPrediction(e) {
+    e?.preventDefault();
+    const body = { nodes: Number($("#p-nodes").value) || 1, hours: Number($("#p-hours").value) || 1 };
+    if ($("#p-cores").value) body.cores = Number($("#p-cores").value);
+    if ($("#p-project").value) body.projects = [$("#p-project").value];
+    $("#predict-status").textContent = "estimating…";
+    try {
+      const res = await fetch("/api/experimental/predict", { method: "POST", headers: { "X-OmniQueue-Token": TOKEN, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      state.prediction = await res.json();
+      $("#predict-status").textContent = "";
+    } catch (err) {
+      state.prediction = { error: err.message };
+      $("#predict-status").textContent = `cannot estimate (${err.message})`;
+    }
+    renderPredict();
+  }
+  function renderPredict() {
+    const out = $("#predict-result");
+    const r = state.prediction;
+    if (!r) { out.replaceChildren(el("p", { class: "muted" }, "Describe the job and press estimate. Candidates are every partition the project poll has load samples for.")); return; }
+    if (r.error) { out.replaceChildren(el("p", { class: "muted" }, `no estimate: ${r.error}`)); return; }
+    const frag = document.createDocumentFragment();
+    if (!r.candidates.length) frag.append(el("p", { class: "muted" }, "No candidates yet: the project poll has not stored load samples (configure `projects` on a cluster and let `omniqueue monitor` run while logged in)."));
+    else {
+      const table = el("table", { class: "parts predict-table" },
+        el("thead", {}, el("tr", {}, el("th", {}, "#"), el("th", {}, "cluster / partition"), el("th", {}, "project"),
+          el("th", { class: "num" }, "est. wait"), el("th", { class: "num" }, "starts at once"), el("th", {}, "confidence"), el("th", {}, "why"))));
+      const tb = el("tbody");
+      r.candidates.forEach((c, i) => {
+        tb.append(el("tr", { class: i === 0 ? "best" : "" },
+          el("td", { class: "num" }, i + 1),
+          el("td", {}, el("span", { class: "cl", style: `--card-color:${clusterColor(c.cluster)}` }, c.cluster), el("span", { class: "muted" }, ` / ${c.partition}`)),
+          el("td", { class: "mono" }, c.project || "–"),
+          el("td", { class: "num" }, c.estimated_wait_h < 0.05 ? "≈ 0" : c.estimated_wait_h < 1 ? `${Math.round(c.estimated_wait_h * 60)} min` : `${c.estimated_wait_h.toFixed(1)} h`),
+          el("td", { class: "num" }, `${Math.round(c.immediate_probability * 100)} %`),
+          el("td", {}, el("span", { class: `conf ${c.confidence}` }, c.confidence)),
+          el("td", { class: "why" }, c.reasons.join(" · "))));
+      });
+      table.append(tb);
+      frag.append(table);
+    }
+    if (r.excluded?.length) frag.append(el("p", { class: "muted small" }, "left out: ", r.excluded.map((c) => `${c.cluster}/${c.partition}${c.project ? ` [${c.project}]` : ""} (${c.excluded})`).join(" · ")));
+    for (const n of r.notes || []) frag.append(el("p", { class: "muted small" }, n));
+    out.replaceChildren(frag);
+  }
+  // a plain button rather than a form submit: the page's CSP has form-action 'none'
+  $("#predict-run").addEventListener("click", runPrediction);
+  $("#predict-form").addEventListener("submit", runPrediction);
+  $("#predict-form").addEventListener("keydown", (e) => { if (e.key === "Enter") runPrediction(e); });
+  $("#predict-back").addEventListener("click", leaveLoadView);
+  $("#predict-toggle").addEventListener("click", enterPredictView);
+
   // ---------- theme ----------
   const THEMES = ["auto", "dark", "light"];
   const THEME_ICON = { auto: "◐", dark: "☾", light: "☀" };
@@ -668,7 +889,16 @@
 
   // ---------- wiring ----------
   $("#refresh").addEventListener("click", requestRefresh);
-  $("#search").addEventListener("input", (e) => { state.search = e.target.value; renderTable(); });
+  $("#search").addEventListener("input", (e) => {
+    if (e.target.value.trim().toLowerCase() === "experimental") {  // the magic word toggles the experimental view
+      e.target.value = "";
+      state.search = "";
+      setExperimental(!state.experimental);
+      renderTable();
+      return;
+    }
+    state.search = e.target.value; renderTable();
+  });
   $("#window").value = String(state.windowHours);
   $("#window").addEventListener("change", (e) => { state.windowHours = Number(e.target.value); savePrefs(); render(); });
   $("#drawer-close").addEventListener("click", closeDrawer);
@@ -698,6 +928,7 @@
     else if (e.key === "t") cycleTheme();
     else if (e.key === "l") { if (state.view === "load") refreshLoad(); else enterLoadView(); }
     else if (e.key === "q") leaveLoadView();
+    else if (e.key === "x") enterPredictView();
     else if (e.key === "w") openWidget();
     else if (e.key === "e") toggleAllArrays();
     else if (e.key === "Escape") { if (state.selected) closeDrawer(); else leaveLoadView(); }
@@ -709,12 +940,14 @@
     if (stateTimer) return;
     fetchState();
     stateTimer = setInterval(fetchState, POLL_MS);
+    startProjectPolling();
     if (state.view === "load" && state.load?.fetching) startLoadPolling();
   }
   function stopPolling() {
     if (stateTimer) clearInterval(stateTimer);
     stateTimer = null;
     stopLoadPolling();
+    stopProjectPolling();
   }
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") startPolling(); else stopPolling();

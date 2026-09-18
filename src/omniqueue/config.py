@@ -38,6 +38,10 @@ class ClusterConfig:
     enabled: bool = True
     color: str | None = None  # optional accent colour for the dashboard
     logo: str | None = None  # image file path or http(s) URL shown on the cluster card
+    projects: list[str] = field(default_factory=list)  # Slurm accounts whose usage (all users) is tracked
+    project_quotas: dict[str, float] = field(default_factory=dict)  # project -> core-hours per 30 days (optional)
+    project_refresh_seconds: int | None = None  # how often the projects are polled here; None = global default
+    nice: int = 0  # the --nice you usually submit with on this cluster (lowers priority; used by the predictor)
 
     @property
     def is_local(self) -> bool:
@@ -59,6 +63,8 @@ class Config:
     access_token: str | None = None  # required by every request when listening beyond loopback
     keepalive_seconds: int = 15  # ssh ServerAliveInterval; a dead link is noticed after 3 misses
     retry_seconds: int = 15  # first retry delay after a failed poll (doubles up to refresh_seconds)
+    project_refresh_seconds: int = 2 * 3600  # slow background poll of project usage, fairshare and load samples
+    project_history_days: int = 90  # how long project jobs and load samples are kept for the rolling overview
     listen_host: str = "127.0.0.1"
     listen_port: int = 8765
     data_dir: Path = field(default_factory=default_data_dir)
@@ -67,6 +73,13 @@ class Config:
     @property
     def enabled_clusters(self) -> list[ClusterConfig]:
         return [c for c in self.clusters if c.enabled]
+
+    def project_interval(self, cluster: ClusterConfig) -> int:
+        return cluster.project_refresh_seconds or self.project_refresh_seconds
+
+    @property
+    def project_clusters(self) -> list[ClusterConfig]:
+        return [c for c in self.enabled_clusters if c.projects]
 
     @property
     def listens_locally(self) -> bool:
@@ -108,6 +121,8 @@ accept_new_host_keys = false # polls only talk to hosts already in ~/.ssh/known_
                              # `omniqueue login` lets you verify a new fingerprint interactively
 keepalive_seconds = 15       # notice a dead connection (new wifi, sleep) within ~45 s
 retry_seconds   = 15         # retry a failed cluster after 15 s, 30 s, 60 s ... up to refresh_seconds
+project_refresh_seconds = 7200  # project usage / fairshare / load samples: slow background poll (2 h)
+project_history_days = 90       # project jobs and load samples kept this long for the rolling overview
 listen_host     = "127.0.0.1"   # keep it local; put Tailscale/ssh -L in front for remote viewing
 listen_port     = 8765
 # allow_remote  = true          # only with an access_token; every request must carry it
@@ -125,6 +140,10 @@ host = "tetralith"               # ssh alias
 # load_partitions = ["main", "gpu"]   # only these partitions in the load view; omit for all
 # color = "#5f9e99"
 # logo = "~/Pictures/nsc.png"    # or drop <name>.png/.svg into ~/.config/omniqueue/logos/
+# projects = ["naiss2025-1-23"]  # Slurm accounts to watch: who runs how much, fairshare, quota (all users)
+# project_quotas = { "naiss2025-1-23" = 100000 }   # core-hours per 30 days, when the site does not publish it via sshare
+# project_refresh_seconds = 3600 # poll the projects on this cluster every hour instead of the global 2 h
+# nice = 0                       # the --nice you usually submit with here (the predictor accounts for it)
 
 [[clusters]]
 name = "dardel"
@@ -236,15 +255,23 @@ def config_from_dict(raw: dict) -> Config:
         if unknown:
             raise ConfigError(f"clusters[{i}] ({c['name']}): unknown keys {sorted(unknown)}")
         validate_ssh_options(c.get("ssh_options", []), f"clusters[{i}] ({c['name']}).ssh_options")
-        for key in ("squeue_args", "sacct_args", "load_partitions"):
+        for key in ("squeue_args", "sacct_args", "load_partitions", "projects"):
             for arg in c.get(key, []):
                 if not isinstance(arg, str) or not _SAFE_VALUE.match(arg):
                     raise ConfigError(f"clusters[{i}] ({c['name']}).{key}: {arg!r} contains characters that are not allowed.")
+        quotas = c.get("project_quotas", {})
+        if not isinstance(quotas, dict):
+            raise ConfigError(f"clusters[{i}] ({c['name']}).project_quotas must be a table of project = core-hours.")
+        for proj, hours in quotas.items():
+            if not isinstance(hours, (int, float)) or hours <= 0:
+                raise ConfigError(f"clusters[{i}] ({c['name']}).project_quotas[{proj!r}] must be a positive number of core-hours.")
+        if c.get("project_refresh_seconds") is not None and int(c["project_refresh_seconds"]) < 300:
+            raise ConfigError(f"clusters[{i}] ({c['name']}).project_refresh_seconds must be at least 300.")
         clusters.append(ClusterConfig(**c))
 
     cfg = Config(clusters=clusters)
     for key in ("refresh_seconds", "lookback_hours", "history_days", "ssh_timeout", "listen_port",
-                "persist_seconds", "keepalive_seconds", "retry_seconds"):
+                "persist_seconds", "keepalive_seconds", "retry_seconds", "project_refresh_seconds", "project_history_days"):
         if key in raw:
             try:
                 setattr(cfg, key, int(raw[key]))
@@ -265,6 +292,8 @@ def config_from_dict(raw: dict) -> Config:
         cfg.logo_dir = Path(os.path.expanduser(str(raw["logo_dir"])))
     if cfg.refresh_seconds < 5:
         raise ConfigError("`refresh_seconds` must be at least 5.")
+    if cfg.project_refresh_seconds < 300:
+        raise ConfigError("`project_refresh_seconds` must be at least 300 (this is a slow, all-users query).")
     if not cfg.listens_locally:
         if not cfg.allow_remote:
             raise ConfigError(

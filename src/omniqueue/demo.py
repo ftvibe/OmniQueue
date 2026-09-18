@@ -10,6 +10,7 @@ from .collector import Collector, ClusterStatus
 from .config import ClusterConfig, Config
 from .history import HistoryStore
 from .models import Job
+from .projects import ProjectPoller, ProjectStore
 
 _NAMES = ["vasp-relax", "qe-scf", "md-npt", "phonopy-fc", "gw-bandstructure", "neb-path", "aimd-2000K", "elastic-c11"]
 _PROBLEMS = ["FAILED", "TIMEOUT", "OUT_OF_MEMORY", "CANCELLED", "NODE_FAIL"]
@@ -124,6 +125,9 @@ class DemoCollector(Collector):
     def connected(self, cluster: ClusterConfig) -> bool | None:
         return cluster.name != "offline-cluster"
 
+    def needs_login(self, cluster: ClusterConfig) -> bool:
+        return False  # the demo's offline cluster fails with a network error instead
+
     def fetch_load_cluster(self, cluster: ClusterConfig) -> dict:
         from .slurm import summarize_load
 
@@ -175,10 +179,105 @@ def demo_config() -> Config:
     return Config(
         logo_dir=logo_dir,
         clusters=[
-            ClusterConfig(name="tetralith", host="tetralith.nsc.liu.se", color="#5f9e99"),
-            ClusterConfig(name="dardel", host="dardel.pdc.kth.se", color="#e2856c", load_partitions=["main", "gpu"]),
-            ClusterConfig(name="lumi", host="lumi.csc.fi", color="#b39a4b"),
-            ClusterConfig(name="offline-cluster", host="unreachable.example.org", color="#8fb8b4"),
+            ClusterConfig(name="tetralith", host="tetralith.nsc.liu.se", color="#5f9e99", projects=["naiss2025-1-42"],
+                          project_quotas={"naiss2025-1-42": 120000}, nice=0),
+            ClusterConfig(name="dardel", host="dardel.pdc.kth.se", color="#e2856c", load_partitions=["main", "gpu"],
+                          projects=["naiss2025-3-7"], project_refresh_seconds=3600, nice=2000),
+            ClusterConfig(name="lumi", host="lumi.csc.fi", color="#b39a4b", projects=["project_465000123"]),
+            ClusterConfig(name="offline-cluster", host="unreachable.example.org", color="#8fb8b4", projects=["naiss2025-9-9"]),
         ],
         refresh_seconds=30,
     )
+
+
+# ---- demo projects ------------------------------------------------------------------------
+_DEMO_PROJECTS = {"tetralith": ["naiss2025-1-42"], "dardel": ["naiss2025-3-7"], "lumi": ["project_465000123"]}
+_DEMO_USERS = ["demo", "x_annli", "x_johsm", "x_marle", "x_petbe", "x_saraw"]
+
+
+def _demo_project_rows(cluster: str, project: str, rng: random.Random, now: float, days: int = 60) -> tuple[list[dict], list[dict]]:
+    """Fabricated sacct rows over `days` days plus the queue right now, for one project."""
+    weights = [0.32, 0.25, 0.18, 0.12, 0.08, 0.05]
+    parts = {"tetralith": ("main", 32, 1), "dardel": ("main", 128, 1), "lumi": ("standard", 256, 2)}
+    part, cpn, tpc = parts.get(cluster, ("batch", 64, 1))
+    sacct: list[dict] = []
+    base = rng.randint(100000, 800000)
+    n_jobs = int(days * rng.uniform(3, 7))
+    for i in range(n_jobs):
+        user = rng.choices(_DEMO_USERS, weights)[0]
+        nodes = rng.choice([1, 1, 1, 1, 2, 2, 4, 8])
+        hours = rng.choice([0.5, 1, 2, 4, 8, 12, 24])
+        start = now - rng.uniform(0, days * 86400)
+        elapsed = int(hours * 3600 * rng.uniform(0.3, 1.0))
+        end = start + elapsed
+        state = "COMPLETED" if rng.random() < 0.85 else rng.choice(["FAILED", "TIMEOUT", "CANCELLED"])
+        if end > now:
+            state, end = "RUNNING", None
+        ts = lambda t: time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(t))  # noqa: E731
+        sacct.append({
+            "job_id": str(base + i), "account": project, "user": user, "partition": part, "state": state,
+            "nodes": nodes, "cpus": nodes * cpn, "elapsed_s": int((now if end is None else end) - start), "cpu_s": 0,
+            "submit": ts(start - rng.uniform(60, 6 * 3600)), "start": ts(start), "end": ts(end) if end else "",
+            "time_limit_s": int(hours * 3600),
+        })
+    queue: list[dict] = []
+    for r in sacct:
+        if r["state"] == "RUNNING":
+            queue.append({"job_id": r["job_id"], "account": project, "user": r["user"], "state": "RUNNING", "partition": part,
+                          "nodes": r["nodes"], "cpus": r["cpus"], "time_limit_s": r["time_limit_s"], "elapsed_s": r["elapsed_s"], "tasks": 1})
+    for i in range(rng.randint(2, 9)):
+        user = rng.choices(_DEMO_USERS, weights)[0]
+        nodes = rng.choice([1, 2, 4, 8])
+        tasks = rng.choice([1, 1, 1, 20, 50])
+        queue.append({"job_id": f"{base + n_jobs + i}" + (f"_[1-{tasks}]" if tasks > 1 else ""), "account": project, "user": user,
+                      "state": "PENDING", "partition": part, "nodes": nodes, "cpus": nodes * cpn, "time_limit_s": 4 * 3600,
+                      "elapsed_s": 0, "tasks": tasks})
+    return sacct, queue
+
+
+def _demo_sshare(project: str, rng: random.Random) -> list[dict]:
+    rows = [{"account": project, "user": "", "raw_shares": 1, "norm_shares": 0.01, "raw_usage": rng.randint(2_000_000, 9_000_000),
+             "effective_usage": rng.uniform(0.005, 0.02), "fairshare": rng.uniform(0.2, 0.9),
+             "grp_tres_mins": {"cpu": 100000 * 60} if project.startswith("naiss2025-3") else {},
+             "grp_tres_raw": {"cpu": rng.randint(20000, 80000) * 60} if project.startswith("naiss2025-3") else {}, "tres_run_mins": {}}]
+    for u in _DEMO_USERS:
+        rows.append({"account": project, "user": u, "raw_shares": 1, "norm_shares": 0.002, "raw_usage": rng.randint(10000, 3_000_000),
+                     "effective_usage": rng.uniform(0.0005, 0.005), "fairshare": rng.uniform(0.1, 0.95),
+                     "grp_tres_mins": {}, "grp_tres_raw": {}, "tres_run_mins": {}})
+    return rows
+
+
+class DemoProjectPoller(ProjectPoller):
+    """Fabricates project usage; the first poll back-fills a month of load samples."""
+
+    def __init__(self, config: Config, store: ProjectStore, collector: Collector, seed: int = 7):
+        super().__init__(config, store, collector)
+        self._rng = random.Random(seed)
+
+    def fetch(self, cluster: ClusterConfig):
+        time.sleep(self._rng.uniform(0.2, 0.6))
+        if cluster.name == "offline-cluster":
+            from .ssh import RemoteError
+
+            raise RemoteError("ssh failed: connect to host unreachable.example.org port 22: Connection timed out", kind="network")
+        now = time.time()
+        sacct_all: list[dict] = []
+        queue_all: list[dict] = []
+        sshare_all: list[dict] = []
+        first = self.store.last_poll(cluster.name) is None
+        for proj in cluster.projects:
+            sacct, queue = _demo_project_rows(cluster.name, proj, self._rng, now, days=60 if first else 2)
+            sacct_all += sacct
+            queue_all += queue
+            sshare_all += _demo_sshare(proj, self._rng)
+        parts = make_demo_load(cluster.name, self._rng)
+        if cluster.load_partitions:
+            parts = [p for p in parts if p["partition"] in cluster.load_partitions]
+        if first:  # a month of samples every two hours, so the predictor has something to work with
+            for k in range(30 * 12, 0, -1):
+                sample = make_demo_load(cluster.name, self._rng)
+                if cluster.load_partitions:
+                    sample = [p for p in sample if p["partition"] in cluster.load_partitions]
+                self.store.add_load_samples(cluster.name, now - k * 7200, sample)
+        warnings = ["sacct shows only your own jobs here (demo warning)"] if cluster.name == "dardel" else []
+        return queue_all, sacct_all, sshare_all, parts, warnings

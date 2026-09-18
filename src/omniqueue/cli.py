@@ -17,6 +17,7 @@ from .collector import Collector
 from .config import Config, ConfigError, default_config_path, load_config, permission_warnings, write_example_config
 from .history import HistoryStore
 from .models import Job
+from .projects import ProjectPoller, ProjectStore
 from .server import make_server
 from .slurm import describe_exit
 from .ssh import close_connection, connection_alive, last_use, login, master_pid
@@ -49,6 +50,19 @@ def _collector(cfg: Config, args) -> Collector:
 
         return DemoCollector(cfg, history)
     return Collector(cfg, history)
+
+
+def _projects(cfg: Config, collector: Collector, args) -> ProjectPoller | None:
+    """The slow project poller, or None when no cluster lists projects."""
+    if not cfg.project_clusters:
+        return None
+    store = ProjectStore(cfg.data_dir / ("projects-demo.json" if getattr(args, "demo", False) else "projects.json"),
+                         cfg.project_history_days)
+    if getattr(args, "demo", False):
+        from .demo import DemoProjectPoller
+
+        return DemoProjectPoller(cfg, store, collector)
+    return ProjectPoller(cfg, store, collector)
 
 
 WIDGET_WIDTH, WIDGET_HEIGHT = 390, 780
@@ -106,7 +120,10 @@ def cmd_serve(args) -> int:
         cfg.listen_host = args.host
     collector = _collector(cfg, args)
     collector.start()
-    server = make_server(collector, cfg.listen_host, cfg.listen_port, cfg.access_token)
+    projects = _projects(cfg, collector, args)
+    if projects:
+        projects.start()
+    server = make_server(collector, cfg.listen_host, cfg.listen_port, cfg.access_token, projects)
     url = f"http://{cfg.listen_host}:{server.server_address[1]}/"
     if cfg.access_token:
         url += f"?token={cfg.access_token}"
@@ -118,6 +135,9 @@ def cmd_serve(args) -> int:
     names = ", ".join(c.name for c in cfg.enabled_clusters)
     view = getattr(args, "view", "dashboard")
     print(f"OmniQueue {__version__} watching {names}\n{'Widget' if view == 'widget' else 'Dashboard'}: {url}  (Ctrl-C to stop)")
+    if projects:
+        plist = ", ".join(f"{c.name}: {', '.join(c.projects)} (every {cfg.project_interval(c) / 3600:g} h)" for c in cfg.project_clusters)
+        print(f"project usage polled in the background: {plist}")
     if view == "widget" and cfg.access_token:
         print("open /widget in that window once the token cookie is set")
     if args.open:
@@ -141,6 +161,8 @@ def cmd_serve(args) -> int:
         print("\nstopping")
     finally:
         collector.stop()
+        if projects:
+            projects.stop()
         server.server_close()
     if cfg.persist_connections and not getattr(args, "demo", False):
         hours = cfg.persist_seconds / 3600
@@ -284,6 +306,64 @@ def cmd_check(args) -> int:
     return 1 if failed else 0
 
 
+def cmd_projects(args) -> int:
+    """Print the project usage the background poll has collected (no cluster access needed
+    unless --poll is given)."""
+    cfg = _load(args)
+    collector = _collector(cfg, args)
+    poller = _projects(cfg, collector, args)
+    if poller is None:
+        print("no cluster lists `projects` in the config; add e.g. projects = [\"naiss2025-1-23\"] to a [[clusters]] entry")
+        return 2
+    if args.poll:
+        poller.refresh(cfg.project_clusters)
+    snap = poller.snapshot()
+    for p in snap["projects"]:
+        upd = time.strftime("%Y-%m-%d %H:%M", time.localtime(p["updated"])) if p["updated"] else "never"
+        head = f"== {p['cluster']} / {p['project']}  (updated {upd}, every {p['refresh_seconds'] / 3600:g} h)"
+        if p.get("error"):
+            head += f"  ERROR: {p['error']}"
+        print(head)
+        if not p["updated"]:
+            print("   no data yet: run `omniqueue projects --poll` or leave `omniqueue monitor` running while logged in\n")
+            continue
+        r, q = p["running"], p["pending"]
+        print(f"   running now: {r['jobs']} jobs on {r['nodes']} nodes ({r['cores']:,.0f} cores) · waiting: {q['jobs']} jobs ({q['cores']:,.0f} cores)")
+        if p["shares"]:
+            fs = p["shares"].get("fairshare")
+            print(f"   fairshare: {fs:.3f}" if fs is not None else "   fairshare: n/a", end="")
+            print(f" · raw usage {p['shares'].get('raw_usage') or 0:,}")
+        if p["quota"]:
+            qd = p["quota"]
+            print(f"   quota: {qd['used_core_h']:,.0f} / {qd['limit_core_h']:,.0f} core-h used ({qd['window']}, {qd['source']})")
+        print(f"   {'USER':<14} {'RUN CORES':>10} {'7 d core-h':>12} {'30 d core-h':>12} {'jobs/30 d':>10}")
+        for u in p["users"][:15]:
+            u7 = p["usage"]["7"]["users"].get(u, {})
+            u30 = p["usage"]["30"]["users"].get(u, {})
+            mark = " <- you" if u == p.get("me") else ""
+            print(f"   {u:<14} {r['users'].get(u, {}).get('cores', 0):>10,.0f} {u7.get('core_h', 0):>12,.0f} "
+                  f"{u30.get('core_h', 0):>12,.0f} {u30.get('jobs', 0):>10}{mark}")
+        print(f"   total 30 d: {p['usage']['30']['core_h']:,.0f} core-h in {p['usage']['30']['jobs']} jobs\n")
+    return 0
+
+
+def cmd_predict(args) -> int:
+    """Experimental: rank clusters/partitions by estimated queue wait, from the stored samples."""
+    from .predict import Request, explain, predict
+
+    cfg = _load(args)
+    collector = _collector(cfg, args)
+    poller = _projects(cfg, collector, args)
+    if poller is None:
+        print("the predictor needs load samples, which the project poll collects: add `projects` to a cluster first")
+        return 2
+    req = Request(nodes=args.nodes, hours=args.hours, cores=args.cores, projects=args.project or None,
+                  clusters=args.cluster or None, partitions=args.partition or None)
+    print("experimental: a heuristic estimate, check it against what really happens\n")
+    print(explain(predict(req, poller.prediction_data())))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="omniqueue", description="Track Slurm jobs on several supercomputers.")
     p.add_argument("--config", "-c", help="path to config.toml (default: ~/.config/omniqueue/config.toml)")
@@ -291,7 +371,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-v", "--verbose", action="store_true", help="debug logging")
     p.add_argument("--version", action="version", version=f"omniqueue {__version__}")
     sub = p.add_subparsers(dest="command", required=True,
-                           metavar="{init,monitor,serve,login,active,logout,list,check,completion}")
+                           metavar="{init,monitor,serve,login,active,logout,list,projects,predict,check,completion}")
 
     s = sub.add_parser("init", help="write an example config file")
     s.add_argument("--force", action="store_true", help="overwrite an existing config")
@@ -331,6 +411,19 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--state", "-s", action="append",
                    help="only show these categories/states (running, pending, ok, problem, FAILED, ...)")
     s.set_defaults(func=cmd_list)
+
+    s = sub.add_parser("projects", help="show who runs how much in your projects (from the slow background poll)")
+    s.add_argument("--poll", action="store_true", help="poll the clusters now instead of showing the stored data")
+    s.set_defaults(func=cmd_projects)
+
+    s = sub.add_parser("predict", help="experimental: where would a job start fastest?")
+    s.add_argument("--nodes", "-N", type=int, default=1, help="nodes the job needs (default 1)")
+    s.add_argument("--hours", "-t", type=float, default=1.0, help="wall time in hours (default 1)")
+    s.add_argument("--cores", "-n", type=int, help="total cores instead of whole nodes")
+    s.add_argument("--project", "-A", action="append", help="only these projects (repeatable)")
+    s.add_argument("--cluster", "-M", action="append", help="only these clusters (repeatable)")
+    s.add_argument("--partition", "-p", action="append", help="only these partitions (repeatable)")
+    s.set_defaults(func=cmd_predict)
 
     s = sub.add_parser("check", help="test the connection to every configured cluster")
     s.set_defaults(func=cmd_check)

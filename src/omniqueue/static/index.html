@@ -37,6 +37,14 @@
 
 <section id="clusters" class="clusters" aria-label="Clusters"></section>
 
+<section id="projects" class="projects" hidden aria-label="Projects">
+  <div class="proj-bar">
+    <span class="proj-title">Projects <span id="proj-status" class="muted"></span></span>
+    <button id="proj-refresh" title="poll the projects now (otherwise every few hours in the background)">↻ refresh projects</button>
+  </div>
+  <div id="proj-cards" class="proj-cards"></div>
+</section>
+
 <nav class="tabs" id="tabs" role="tablist">
   <button data-tab="all" role="tab">All <span class="count"></span></button>
   <button data-tab="running" role="tab" class="c-running">Running <span class="count"></span></button>
@@ -44,8 +52,27 @@
   <button data-tab="problem" role="tab" class="c-problem">Failed <span class="count"></span></button>
   <button data-tab="ok" role="tab" class="c-ok">Completed <span class="count"></span></button>
   <span class="tabs-spacer"></span>
+  <button id="predict-toggle" class="view-toggle experimental" hidden title="experimental: where would a job start fastest? (x); q returns to your jobs">where to submit? <kbd>x</kbd></button>
   <button id="view-toggle" class="view-toggle" title="cluster load view (l); q returns to your jobs">cluster load <kbd>l</kbd></button>
 </nav>
+
+<section id="predict" class="predict" hidden aria-label="Where to submit (experimental)">
+  <div class="load-bar">
+    <span><span class="exp-badge">experimental</span> <span class="muted">a heuristic from the project poll's load samples, your fairshare, nice values and quotas. Check it against reality; type <code>experimental</code> in the search box again to hide it.</span></span>
+    <span class="load-actions">
+      <button id="predict-back" title="back to your jobs (q)">← my jobs <kbd>q</kbd></button>
+    </span>
+  </div>
+  <form id="predict-form" class="predict-form">
+    <label>nodes <input id="p-nodes" type="number" min="1" value="1"></label>
+    <label>hours <input id="p-hours" type="number" min="0.1" step="0.5" value="4"></label>
+    <label>cores <input id="p-cores" type="number" min="1" placeholder="whole nodes"></label>
+    <label>project <select id="p-project"><option value="">any</option></select></label>
+    <button type="button" id="predict-run">estimate</button>
+    <span id="predict-status" class="muted"></span>
+  </form>
+  <div id="predict-result"></div>
+</section>
 
 <section id="load" class="load" hidden aria-label="Cluster load">
   <div class="load-bar">

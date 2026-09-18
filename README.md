@@ -53,6 +53,8 @@ persist_seconds = 14400      # ... for this long after the last poll (4 h)
 accept_new_host_keys = false # polls require hosts in known_hosts; `omniqueue login` verifies new ones
 keepalive_seconds = 15       # notice a dead connection within ~45 s
 retry_seconds   = 15         # retry failed clusters after 15 s, 30 s, 60 s ... up to refresh_seconds
+project_refresh_seconds = 7200  # slow background poll of project usage / fairshare / load samples (2 h)
+project_history_days = 90       # how long project jobs and load samples are kept
 listen_host     = "127.0.0.1"
 listen_port     = 8765
 
@@ -66,6 +68,10 @@ host = "tetralith"          # anything ssh accepts, aliases from ~/.ssh/config i
 # use_sacct = false         # for clusters without job accounting
 # color = "#5f9e99"         # accent colour in the dashboard
 # logo = "~/Pictures/nsc.png" # or drop <name>.svg/.png into ~/.config/omniqueue/logos/
+# projects = ["naiss2025-1-23"]                    # watch these Slurm accounts: who runs how much (all users)
+# project_quotas = { "naiss2025-1-23" = 100000 }  # core-hours per 30 days, if sshare does not publish a limit
+# project_refresh_seconds = 3600                  # poll this cluster's projects hourly instead of the global 2 h
+# nice = 0                  # the --nice you usually submit with here (the experimental predictor accounts for it)
 
 [[clusters]]
 name = "dardel"
@@ -146,13 +152,15 @@ network change that dropped the connection.
 | `omniqueue logout [CLUSTER...]` | close the persistent ssh connection(s) now |
 | `omniqueue login --force CLUSTER` | reconnect a cluster whose connection is stale |
 | `omniqueue list [--state running] ...` | poll once and print a table to the terminal |
+| `omniqueue projects [--poll]` | who runs how much in your projects, from the stored slow poll (`--poll` asks the clusters now) |
+| `omniqueue predict -N 4 -t 12 [-A proj]` | experimental: rank clusters/partitions by estimated queue wait for such a job |
 | `omniqueue check` | connect to every cluster once and report problems |
 | `omniqueue init [--force]` | write the example config |
 | `omniqueue completion bash\|zsh\|fish` | print a tab-completion script |
 | `omniqueue --demo ...` | run any command against fabricated clusters |
-
-Dashboard keys: `/` search, `r` refresh now, `l` cluster load, `q` back to jobs, `e` expand/collapse arrays, `w` side widget, `t` theme, `1`-`5` tabs, `Esc` close.
 | `omniqueue --config PATH ...` | use another config file |
+
+Dashboard keys: `/` search, `r` refresh now, `l` cluster load, `q` back to jobs, `e` expand/collapse arrays, `w` side widget, `t` theme, `1`-`5` tabs, `x` where to submit (after unlocking, see below), `Esc` close.
 
 ## Tab completion
 
@@ -225,6 +233,8 @@ cluster names from your config, `list --state` the job states.
   or collapses every array.
 * Click a row for all details (queue wait, node list, work dir, exit code, ...).
   Finished jobs can be removed from the local history from there.
+* **Project cards** appear below the cluster cards for every project listed in
+  the config: see [Projects](#projects-who-runs-how-much) below.
 * Muted teal / coral / mustard palette, dark and light; failed and done never
   rely on a red-green pair. The ◐ button (or `t`) cycles auto / dark / light.
 * Keys: `/` search, `r` refresh now, `l` cluster load (again: refetch), `q` back to jobs, `t` theme, `1`-`5` tabs, `Esc` close.
@@ -262,6 +272,103 @@ crashed or timed-out job then pops up a system notification even when the
 window is behind others. Query parameters tune it:
 `/widget?refresh=300&alerts=24&n=8` re-reads every 5 min, alerts on the last
 24 h and lists 8 jobs per section.
+
+## Projects: who runs how much
+
+List the Slurm accounts you share in a cluster entry (`projects = [...]`) and
+OmniQueue watches the *whole* project, every user, on a much slower timescale
+than your own jobs: every 2 hours by default (`project_refresh_seconds`,
+overridable per cluster). One card per project sits under the cluster cards:
+
+* **running now**: jobs, cores and waiting jobs of the project at the last
+  poll, with a bar split by user (hover a segment for the number);
+* **last 30 d**: core-hours and jobs of the last 30 (and 7) days, again split
+  by user, and a small chart of core-hours per day for the last month;
+* the user legend with each person's 30-day core-hours (you are marked);
+* the project's **fairshare** factor (and yours), from `sshare`;
+* a **quota bar** when a limit is known: `project_quotas` in the config
+  (core-hours per rolling 30 days) or, without it, the group limit some sites
+  set in Slurm (`GrpTRESMins`, shown as "allocation").
+
+Under the hood one ssh round trip per poll runs `squeue --account=...` for the
+project's queue, `sacct --allusers --accounts=...` for its accounting since the
+previous poll, `sshare --all --accounts=...` for fairshare and usage, and the
+same `sinfo` + all-users `squeue` the load view uses. Everything lands in
+`~/.local/share/omniqueue/projects.json`: project jobs are stored individually
+and kept for `project_history_days` (90 by default), so the rolling overview
+outlives Slurm's own accounting window and a restart never re-fetches history.
+Only the slice since the last poll is requested each time. Some sites hide
+other users' jobs in `sacct`; the card then says so and the per-user split
+comes from the queue and from `sshare` only. `omniqueue projects` prints the
+same overview in the terminal.
+
+Like everything else, the project poll never opens a connection itself: it
+waits for `omniqueue login` and the card says "not logged in" until then. The
+↻ button on the card row polls at once.
+
+### Where to submit? (experimental)
+
+Type `experimental` into the search box and a dashed **where to submit?**
+button appears next to *cluster load* (`x` opens it; type the word again to
+hide it). Describe a job (nodes, hours, optionally cores and a project) and
+`omniqueue.predict` ranks every partition it has data for by an estimated
+queue wait, with the reasons spelled out. `omniqueue predict -N 4 -t 12` does
+the same in the terminal. The estimate is a transparent heuristic, not a
+scheduler simulation:
+
+* **free now**: the share of the last week's load samples in which at least
+  the requested nodes were idle, taken as the chance of an immediate start;
+* **queue pressure**: nodes asked for by pending jobs relative to the partition
+  size, turned into hours with the typical run time of the project's jobs on
+  that partition;
+* **fairshare**: your Slurm fairshare factor on that project (the project's
+  when yours is unknown) scales the queue wait from 0.5x (factor 1) to 1.5x
+  (factor 0);
+* **nice**: the `nice` value in the cluster entry doubles the estimate per 5000;
+* **history**: the median wait of your own similar-sized jobs there in the last
+  30 days is blended in when it exists;
+* **quota**: a project with fewer core-hours left than the job needs is left
+  out, one that is nearly used is flagged;
+* partitions whose time limit is too short or that are smaller than the job
+  are left out; a candidate whose latest load sample is stale gets "low"
+  confidence.
+
+The factors are returned with every candidate so you can compare the estimate
+with what really happened and tune the constants at the top of
+`src/omniqueue/predict.py`. Ideas for later, in order of usefulness: record
+the actual wait of every job you submit and fit the pressure-to-hours
+conversion per partition from that; read `sprio` for the priority of the
+jobs ahead of you instead of the fairshare proxy; ask `squeue --start` for
+Slurm's own backfill estimate of a probe job.
+
+### Building the data with only the widget open
+
+Everything above is gathered by the *server*, not by the page that happens to
+be open, so a widget-only setup collects it just as well:
+
+* `omniqueue monitor widget` starts the same Python process as the dashboard;
+  the project poll runs in it as a background thread with its own clock
+  (`project_refresh_seconds` per cluster), whether a dashboard, a widget or
+  nothing at all is looking.
+* The widget's 10-minute cadence only governs the *job* poll (the server polls
+  at the pace of the fastest page watching). The project poll is independent
+  of viewers and never faster than its configured interval, so the extra load
+  on a cluster is one `squeue`/`sacct`/`sshare`/`sinfo` round trip every 2 h.
+* The poll only runs while you are logged in (`omniqueue login`), so the
+  natural rhythm is: log in in the morning, start the widget, and by the
+  evening there are six load samples per partition and the day's accounting
+  in `projects.json`. Log out; nothing happens until the next login.
+* Every poll asks `sacct` only for the time since the previous poll (plus a
+  day of slack), and stores jobs by id, so gaps (laptop closed, logged out)
+  are filled in on the next poll without duplicates; load samples are simply
+  missing for the gap, which the predictor tolerates.
+* When you later open the dashboard the cards and the predictor read the
+  accumulated store, so the picture is complete even if you never looked at
+  it while it was being built. `omniqueue projects` and `omniqueue predict`
+  read the same file without any cluster access.
+* To let the widget itself show a project line later, it would only need to
+  read `/api/projects` on its own slow schedule (the endpoint answers 304 when
+  nothing changed); no new cluster traffic would be involved.
 
 ## Security notes
 
@@ -321,6 +428,15 @@ sinfo  --noheader --format='%P|%a|%D|%T|%C|%l' [--partition=main,gpu]; echo "@@O
 squeue --noheader --states=RUNNING,PENDING --format='%P|%T|%D|%C' [--partition=main,gpu]; echo "@@OMNIQUEUE squeue_all rc=$?"
 ```
 
+The project poll, every `project_refresh_seconds` per cluster, runs in one round trip:
+
+```
+squeue --noheader --states=RUNNING,PENDING --account=<projects> --format='%i|%a|%u|%T|%P|%D|%C|%l|%M'; \
+sacct  --noheader --parsable2 --allocations --allusers --accounts=<projects> --starttime=<last poll - 1 d> --format=JobID,Account,User,...; \
+sshare --noheader --parsable2 --all --accounts=<projects> --format=Account,User,RawShares,...,FairShare,GrpTRESMins,GrpTRESRaw,TRESRunMins; \
+sinfo ...; squeue --states=RUNNING,PENDING ...          # the same load sample the load view takes
+```
+
 `squeue` is authoritative for anything it lists; `sacct` supplies finished jobs
 and their exit codes. Everything is merged into a JSON history file in
 `~/.local/share/omniqueue/`, so crashed jobs stay visible after the cluster's
@@ -339,5 +455,5 @@ Queue" in a bold 5x7 pixel font. The hand-drawn smooth-lettered originals are
 kept as `logo_text_smooth.svg` and `logo_text_smooth_dark.svg`.
 
 ```sh
-python -m unittest discover -s tests -v
+PYTHONPATH=src python -m unittest discover -s tests -v
 ```

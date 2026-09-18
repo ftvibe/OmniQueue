@@ -70,6 +70,13 @@ class Collector:
         self._conn_cache.pop(cluster.name, None)  # decide on a fresh check, not a cached one
         return not self.connected(cluster)
 
+    def needs_login(self, cluster: ClusterConfig) -> bool:
+        """True when polls must wait for `omniqueue login` (shared with the project poller)."""
+        return self._needs_login(cluster)
+
+    def status_of(self, name: str) -> ClusterStatus | None:
+        return self._status.get(name)
+
     def connected(self, cluster: ClusterConfig) -> bool | None:
         """Whether a persistent ssh master for this cluster is open right now.
 

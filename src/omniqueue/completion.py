@@ -14,6 +14,8 @@ COMMANDS = {
     "active": "show open ssh connections and their remaining time",
     "logout": "close the persistent ssh connections",
     "list": "poll once and print a job table",
+    "projects": "who runs how much in your projects",
+    "predict": "experimental: where would a job start fastest",
     "check": "test the connection to every cluster",
     "completion": "print a shell completion script",
 }
@@ -28,7 +30,7 @@ _omniqueue() {
   for ((i = 1; i < COMP_CWORD; i++)); do
     case "${COMP_WORDS[i]}" in
       -c|--config) cfg="--config ${COMP_WORDS[i+1]}"; ((i++)) ;;
-      init|monitor|serve|login|active|logout|list|check|completion) cmd="${COMP_WORDS[i]}"; break ;;
+      init|monitor|serve|login|active|logout|list|projects|predict|check|completion) cmd="${COMP_WORDS[i]}"; break ;;
     esac
   done
   if [[ "$prev" == "-c" || "$prev" == "--config" ]]; then
@@ -47,6 +49,12 @@ _omniqueue() {
         COMPREPLY=( $(compgen -W "--state" -- "$cur") )
       fi ;;
     monitor) COMPREPLY=( $(compgen -W "dashboard widget --port --host --no-open --plain" -- "$cur") ) ;;
+    projects) COMPREPLY=( $(compgen -W "--poll" -- "$cur") ) ;;
+    predict)
+      case "$prev" in
+        -M|--cluster) COMPREPLY=( $(compgen -W "$(omniqueue $cfg _clusters 2>/dev/null)" -- "$cur") ) ;;
+        *) COMPREPLY=( $(compgen -W "--nodes --hours --cores --project --cluster --partition" -- "$cur") ) ;;
+      esac ;;
     serve)   COMPREPLY=( $(compgen -W "--port --host --open" -- "$cur") ) ;;
     init)    COMPREPLY=( $(compgen -W "--force" -- "$cur") ) ;;
     completion) COMPREPLY=( $(compgen -W "bash zsh fish" -- "$cur") ) ;;
@@ -80,6 +88,8 @@ _omniqueue() {
         logout) _arguments "*:cluster:($clusters)" ;;
         list)   _arguments '*'{-s,--state}'[only these states]:state:(__STATES__)' ;;
         monitor) _arguments '--port[listen port]:port' '--host[listen host]:host' '--no-open[do not open a browser]' '--plain[widget: normal tab instead of a Safari window]' '1:view:(dashboard widget)' ;;
+        projects) _arguments '--poll[poll the clusters now]' ;;
+        predict) _arguments '(-N --nodes)'{-N,--nodes}'[nodes]:nodes' '(-t --hours)'{-t,--hours}'[wall time in hours]:hours' '(-n --cores)'{-n,--cores}'[total cores]:cores' '*'{-A,--project}'[project]:project' '*'{-M,--cluster}"[cluster]:cluster:($clusters)" '*'{-p,--partition}'[partition]:partition' ;;
         serve)   _arguments '--port[listen port]:port' '--host[listen host]:host' '--open[open the dashboard]' ;;
         init)    _arguments '--force[overwrite an existing config]' ;;
         completion) _arguments '1:shell:(bash zsh fish)' ;;
@@ -107,6 +117,13 @@ complete -c omniqueue -n '__fish_seen_subcommand_from monitor' -l no-open -d 'do
 complete -c omniqueue -n '__fish_seen_subcommand_from monitor' -a 'dashboard widget' -d 'what to open'
 complete -c omniqueue -n '__fish_seen_subcommand_from monitor' -l plain -d 'widget: normal tab instead of a Safari window'
 complete -c omniqueue -n '__fish_seen_subcommand_from serve' -l open -d 'open the dashboard'
+complete -c omniqueue -n '__fish_seen_subcommand_from projects' -l poll -d 'poll the clusters now'
+complete -c omniqueue -n '__fish_seen_subcommand_from predict' -s N -l nodes -x -d 'nodes'
+complete -c omniqueue -n '__fish_seen_subcommand_from predict' -s t -l hours -x -d 'wall time in hours'
+complete -c omniqueue -n '__fish_seen_subcommand_from predict' -s n -l cores -x -d 'total cores'
+complete -c omniqueue -n '__fish_seen_subcommand_from predict' -s A -l project -x -d 'project'
+complete -c omniqueue -n '__fish_seen_subcommand_from predict' -s M -l cluster -x -a '(omniqueue _clusters 2>/dev/null)' -d 'cluster'
+complete -c omniqueue -n '__fish_seen_subcommand_from predict' -s p -l partition -x -d 'partition'
 complete -c omniqueue -n '__fish_seen_subcommand_from init' -l force -d 'overwrite an existing config'
 complete -c omniqueue -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'
 """
